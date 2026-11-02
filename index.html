@@ -68,15 +68,16 @@ td.pl{color:var(--muted);width:3em}
 .counts{display:flex;gap:14px;padding:8px 12px;color:var(--muted);font-size:13px}
 .counts b{color:var(--fg);font-family:var(--mono)}
 
-.start{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:16px;background:
+.start{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;gap:16px;background:
   radial-gradient(120% 70% at 50% 0%, #1b2430 0%, var(--bg) 60%);overflow-y:auto;
   padding:calc(24px + env(safe-area-inset-top,0px)) max(24px,env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) max(24px,env(safe-area-inset-left,0px))}
-.start > *{width:100%;max-width:440px;margin-left:auto;margin-right:auto}
+.start > *{width:100%;max-width:440px;margin-left:auto;margin-right:auto;flex-shrink:0}
+.start > :first-child{margin-top:auto}.start > :last-child{margin-bottom:auto}
 .start h1{font-size:30px;margin:0;line-height:1.1;letter-spacing:.01em}
 .start p{color:var(--muted);margin:0}
 .start .err{color:var(--bad)}
 .start .btn{flex:none}
-.target{display:block;width:min(74vw,290px);height:auto;margin:0 auto 4px;overflow:visible}
+.target{display:block;width:min(74vw,290px,34vh);aspect-ratio:268/274;height:auto;margin:0 auto 4px;overflow:visible}
 .target .arrow{animation:land .5s cubic-bezier(.2,.9,.3,1.2) both}
 .target .mark{animation:show .15s linear both}
 @keyframes show{from{opacity:0}to{opacity:1}}
@@ -157,7 +158,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <p id="loadmsg">Herkenning laden…</p>
   <button class="btn primary" id="go" type="button" disabled>Camera starten</button>
   <button class="btn" id="gophoto" type="button" disabled>Foto kiezen</button>
-  <p style="font-size:12px">Versie 7 · 2 november 2026</p>
+  <p style="font-size:12px">Versie 8 · 2 november 2026</p>
 </div>
 
 <dialog id="dlg">
