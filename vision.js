@@ -16,8 +16,18 @@
      25m1p: Pr. | 5 arrows | serie                              (rows 5, 10, 15 ...; total = sum of series) */
   const LAYOUTS = {
     '18m3': { id: '18m3', cols: TPL, arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], cum: [5, 6], total: [5, 6], spillRight: 6, step: 3, subDigits: 2 },
-    '25m1p': { id: '25m1p', cols: [0, 0.119, 0.269, 0.416, 0.565, 0.714, 0.862, 1.0], arrows: [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], sub: [6, 7], cum: null, total: [5, 7], spillRight: 7, step: 5, subDigits: 2 }
+    '25m1p': { id: '25m1p', cols: [0, 0.119, 0.269, 0.416, 0.565, 0.714, 0.862, 1.0], arrows: [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], sub: [6, 7], cum: null, total: [5, 7], spillRight: 7, step: 5, subDigits: 2 },
+    /* Ianseo (outdoor): end no. | 3 arrows | Sum | end total | Tot. | 10+X | X. Two rows per end of 6 arrows;
+       the end total and running total are on the second row (crossed out on the first). The End|Tot. line
+       does not run the full height, so it is not used to recognise the layout (match). */
+    'ianseo': { id: 'ianseo', cols: [0, 0.1, 0.225, 0.349, 0.474, 0.605, 0.689, 0.824, 0.912, 1.0], match: [0, 1, 2, 3, 4, 5, 7, 8, 9],
+      arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], end: [5, 6], cum: [6, 7], tx: [7, 8], xx: [8, 9],
+      total: [6, 7], ttx: [7, 8], txx: [8, 9], spillRight: 9, step: 1, subDigits: 2, pairs: true }
   };
+  const layoutFields = lay => lay.arrows.map((sp, k) => ['a' + k, sp])
+    .concat([['sub', lay.sub]], ['end', 'cum', 'tx', 'xx'].filter(f => lay[f]).map(f => [f, lay[f]]))
+    .sort((p, q) => p[1][0] - q[1][0]);
+  const totalFields = lay => ['total', 'ttx', 'txx'].filter(f => lay[f]).map(f => [f, lay[f]]);
   const ROWH = 40;
   const PAD = 20;
   const CLASSES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'M', 'X', '10'];
@@ -128,14 +138,21 @@
     return [idx(iMin(s)), idx(iMax(d)), idx(iMax(s)), idx(iMin(d))];
   }
 
-  function lineMasks(cv, gray) {
+  function lineMasks(cv, gray, tol = 1) {
     const w = gray.cols, h = gray.rows;
     const bw = new cv.Mat(), hl = new cv.Mat(), vl = new cv.Mat();
     cv.adaptiveThreshold(gray, bw, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, odd(Math.max(15, Math.min(w, h) / 25)), 12);
-    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(Math.max(10, Math.floor(w / 35)), 1));
-    cv.morphologyEx(bw, hl, cv.MORPH_OPEN, k); k.delete();
-    k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, Math.max(10, Math.floor(h / 50))));
-    cv.morphologyEx(bw, vl, cv.MORPH_OPEN, k); k.delete();
+    // a thin line a few degrees off level is a staircase of short runs; widen it across its direction
+    // first (tol px) so the long opening still finds it
+    const open = (out, kw, kh, tw, th) => {
+      let src = bw;
+      if (tol > 1) { src = new cv.Mat(); const d = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(tw, th)); cv.dilate(bw, src, d); d.delete(); }
+      const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kw, kh));
+      cv.morphologyEx(src, out, cv.MORPH_OPEN, k); k.delete();
+      if (src !== bw) src.delete();
+    };
+    open(hl, Math.max(10, Math.floor(w / 35)), 1, 1, tol);
+    open(vl, 1, Math.max(10, Math.floor(h / 50)), tol, 1);
     return { bw, hl, vl };
   }
 
@@ -150,16 +167,22 @@
         const L = xs[i], R = xs[j], gw = R - L;
         if (gw < W * 0.35) break;
         let hits = 0; const fit = [];
-        for (const t of lay.cols) {
+        const tcols = lay.match ? lay.match.map(i => lay.cols[i]) : lay.cols;
+        for (const t of tcols) {
           const x = L + t * gw; let bp = x, bd = 1e9;
           for (const p of xs) { const d = Math.abs(p - x); if (d < bd) { bd = d; bp = p; } }
           if (bd < gw * 0.025) { hits++; fit.push(bp); } else fit.push(x);
         }
         // every line of the template should be there, and lines between the borders that the template
         // does not explain point to another layout
-        const extra = xs.filter(p => p > L + gw * 0.01 && p < R - gw * 0.01 && !fit.some(f => Math.abs(f - p) < gw * 0.025)).length;
-        const score = hits / lay.cols.length - 0.08 * extra;
-        if (hits >= lay.cols.length - 2 && (!best || score > best.score + 1e-6)) best = { score, hits, L, R, fit, lay };
+        // partial lines of a layout (Ianseo's End|Tot.) are welcome but not required
+        const opt = (lay.match ? lay.cols.filter((_, i) => !lay.match.includes(i)) : []).map(t => L + t * gw);
+        const optHits = opt.filter(x => xs.some(p => Math.abs(p - x) < gw * 0.025)).length;
+        const explained = p => fit.some(f => Math.abs(f - p) < gw * 0.025) || opt.some(x => Math.abs(x - p) < gw * 0.025);
+        const extra = xs.filter(p => p > L + gw * 0.01 && p < R - gw * 0.01 && !explained(p)).length;
+        // a template that explains more of the lines wins a near tie (25m1p fits part of an Ianseo grid)
+        const score = (hits + 0.5 * optHits) / tcols.length - 0.08 * extra + 0.02 * (hits + optHits);
+        if (hits >= tcols.length - 2 && (!best || score > best.score + 1e-6)) best = { score, hits, L, R, fit, lay };
       }
     }
     if (!best) return null;
@@ -201,12 +224,43 @@
     let rows = ys.slice(a, b + 2);
     // the 25m1p header row ("Pr.") has the same boxes as a score row; a sheet has 5 ends
     if (lay.id === '25m1p' && rows.length - 1 > 5) rows = rows.slice(rows.length - 6);
+    // Ianseo: the header row ("1 2 3") has the arrow boxes too; data rows come in pairs
+    if (lay.pairs) {
+      // The End|Tot. divider is only drawn on the second row of each pair (the first row has a cross
+      // there). That tells which rows belong together, and that the columns are not shifted.
+      const xd = Math.round(L + lay.cols[lay.end[1]] * gw);
+      const sec = rows.slice(0, -1).map((y, k) => colCover(xd, y, rows[k + 1]) > 0.5);
+      let bestS = null;
+      for (let s = 0; s < 2; s++) {
+        const ok = []; for (let k = s; k + 1 < sec.length; k += 2) ok.push(!sec[k] && sec[k + 1]);
+        // longest run of consecutive good pairs
+        let r0 = -1, len = 0, bi = -1, bl = 0;
+        ok.forEach((v, j) => { if (v) { if (r0 < 0) r0 = j; len = j - r0 + 1; if (len > bl) { bl = len; bi = r0; } } else r0 = -1; });
+        if (bl > 0 && (!bestS || bl > bestS.bl)) bestS = { s, bi, bl };
+      }
+      if (!bestS) return null; // no pair structure: not an Ianseo grid, or the columns are shifted
+      const k0 = bestS.s + 2 * bestS.bi;
+      rows = rows.slice(k0, k0 + 2 * bestS.bl + 1);
+    }
     const gaps = rows.slice(1).map((y, i) => y - rows[i]).sort((p, q) => p - q);
     const rh = gaps[gaps.length >> 1];
     // a score grid is about 8-9 row heights wide; anything else (e.g. two cards seen as one) is rejected
     if ((R - L) / rh < 5 || (R - L) / rh > 14) return null;
     let total = null;
-    if (b + 2 < ys.length) { const g = ys[b + 2] - ys[b + 1]; if (g > 0.6 * rh && g < 1.5 * rh) total = ys[b + 2]; }
+    const li = ys.indexOf(rows[rows.length - 1]);
+    if (li >= 0 && li + 1 < ys.length) {
+      const g = ys[li + 1] - ys[li];
+      // Ianseo: a row with arrow boxes below the last pair is a pair that was not found, not the Total row
+      if (g > 0.6 * rh && g < 1.5 * rh && !(lay.pairs && hasDividers(ys[li], ys[li + 1]))) total = ys[li + 1];
+    }
+    if (total === null && !(lay.pairs && li + 1 < ys.length && hasDividers(ys[li], ys[li + 1]))) {
+      // the Total row may only be boxed under the total columns (Ianseo: barcode on the left)
+      const tx0 = Math.round(L + lay.cols[(lay.total || [0])[0]] * gw), tx1 = Math.round(R);
+      const last = rows[rows.length - 1];
+      const ys2 = peaks(rowSums(hl, tx0, tx1), (tx1 - tx0) * 0.6, H * 0.008);
+      const cand = ys2.find(y => y > last + 0.6 * rh && y < last + 1.5 * rh);
+      if (cand !== undefined) total = cand;
+    }
     return { L, R, rows, total, rh, layout: lay.id };
   }
 
@@ -311,7 +365,43 @@
     return best;
   }
 
-  function detectAt(cv, gray, scale, layoutIds) {
+  /** The smallest parallelogram around a contour with its sides along the card's own line directions.
+      A card that is not a plain rectangle (Ianseo: header and Total box stick out, a barcode instead of a
+      bottom-left corner) gets wrong corners from a 4-point fit; in a photo with perspective the global
+      straightening leaves each card slightly sheared, which the local directions take into account. */
+  function localParallelogram(cv, c, hl, vl) {
+    const r = cv.boundingRect(c);
+    if (r.width < 60 || r.height < 60) return null;
+    const dir = (mask, horizontal) => {
+      const roi = mask.roi(r), lines = new cv.Mat();
+      const minLen = Math.round((horizontal ? r.width : r.height) * 0.25);
+      cv.HoughLinesP(roi, lines, 1, Math.PI / 720, Math.max(20, minLen >> 1), minLen, 2);
+      const d = lines.data32S; let sw = 0, sa = 0;
+      for (let i = 0; i < lines.rows; i++) {
+        const dx = d[i * 4 + 2] - d[i * 4], dy = d[i * 4 + 3] - d[i * 4 + 1], len = Math.hypot(dx, dy);
+        let a = horizontal ? Math.atan2(dy, dx) : Math.atan2(dx, dy); // from level / from upright
+        if (a > Math.PI / 2) a -= Math.PI; if (a < -Math.PI / 2) a += Math.PI;
+        if (Math.abs(a) < 0.15) { sw += len; sa += a * len; }
+      }
+      roi.delete(); lines.delete();
+      return sw ? sa / sw : null;
+    };
+    const ah = dir(hl, true), av = dir(vl, false);
+    if (ah === null || av === null) return null;
+    const ex = [Math.cos(ah), Math.sin(ah)], ey = [Math.sin(av), Math.cos(av)]; // level and upright direction
+    const det = ex[0] * ey[1] - ey[0] * ex[1];
+    if (Math.abs(det) < 0.5) return null;
+    const d = c.data32S; let s0 = 1e9, s1 = -1e9, t0 = 1e9, t1 = -1e9;
+    for (let i = 0; i < d.length; i += 2) {
+      const x = d[i], y = d[i + 1];
+      const s = (x * ey[1] - y * ey[0]) / det, t = (ex[0] * y - ex[1] * x) / det;
+      if (s < s0) s0 = s; if (s > s1) s1 = s; if (t < t0) t0 = t; if (t > t1) t1 = t;
+    }
+    const P = (s, t) => ({ x: s * ex[0] + t * ey[0], y: s * ex[1] + t * ey[1] });
+    return [P(s0, t0), P(s1, t0), P(s1, t1), P(s0, t1)];
+  }
+
+  function detectAt(cv, gray, scale, layoutIds, tol = 1) {
     const small = new cv.Mat();
     if (scale < 0.75) {
       // keep thin printed lines: darkest pixel wins before shrinking
@@ -323,12 +413,17 @@
     } else {
       cv.resize(gray, small, new cv.Size(Math.round(gray.cols * scale), Math.round(gray.rows * scale)), 0, 0, cv.INTER_AREA);
     }
-    const { bw, hl, vl } = lineMasks(cv, small);
+    const { bw, hl, vl } = lineMasks(cv, small, tol);
     const lines = new cv.Mat(); cv.bitwise_or(hl, vl, lines);
     const contours = new cv.MatVector(), hier = new cv.Mat();
-    cv.findContours(lines, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const A = small.rows * small.cols, cand = [];
-    for (let i = 0; i < contours.size(); i++) { const c = contours.get(i); const a = cv.contourArea(c); if (a >= 0.012 * A) cand.push({ i, a }); c.delete(); }
+    // outer outlines only, but also those lying inside another outline: the edge of a sheet of paper
+    // around the cards (two Ianseo cards on one A4) must not hide them
+    cv.findContours(lines, contours, hier, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
+    const A = small.rows * small.cols, cand = [], hd = hier.data32S;
+    for (let i = 0; i < contours.size(); i++) {
+      if (hd[i * 4 + 3] !== -1) continue; // a hole
+      const c = contours.get(i); const a = cv.contourArea(c); if (a >= 0.012 * A) cand.push({ i, a }); c.delete();
+    }
     cand.sort((p, q) => q.a - p.a);
     const out = [];
     const tryQuad = pts => {
@@ -365,6 +460,8 @@
       }
       hull.delete();
       quads.push(orderQuad(cv.RotatedRect.points(cv.minAreaRect(c))));
+      const pg = localParallelogram(cv, c, hl, vl);
+      if (pg) quads.push(pg);
       c.delete();
       let best = null;
       for (const q of quads) { const r = tryQuad(q); if (r && (!best || r.res.rows.length > best.res.rows.length)) best = r; }
@@ -727,8 +824,8 @@
     ink.delete();
     const cx = lay.cols.map(t => PAD + t * W);
     const last = lay.spillRight, colW = cx[1] - cx[0];
-    const spans = lay.arrows.map((sp, k) => ['a' + k, sp]).concat([['sub', lay.sub]], lay.cum ? [['cum', lay.cum]] : []);
-    const rightEdge = (lay.cum || lay.sub)[1];
+    const spans = layoutFields(lay);
+    const rightEdge = Math.max(...spans.map(([, sp]) => sp[1]));
     const field = c => {
       const x = c.cx;
       // handwriting may spill a bit past the last read column (into Hits, or past the border)
@@ -737,10 +834,14 @@
       for (const [f, [a, b]] of spans) if (x < cx[b]) return f;
       return spans[spans.length - 1][0];
     };
+    const tspans = totalFields(lay), spill = lay.pairs ? 0.6 : 1.6;
     const totalField = c => {
       // the Totaal row also holds printed text: only take handwriting-sized marks right of the label
-      if (c.h < ROWH * 0.45 || c.w > ROWH * 2.5) return null; // printed label, or a signature stroke
-      return c.cx >= cx[lay.total[0]] && c.cx <= cx[lay.total[1]] + colW * 1.6 ? 'total' : null;
+      if (c.h < ROWH * (lay.pairs ? 0.2 : 0.45) || c.w > ROWH * 2.5) return null; // printed label, or a signature stroke
+      if (c.cx < cx[tspans[0][1][0]]) return null;
+      for (const [f, [a, b]] of tspans) if (c.cx < cx[b]) return f;
+      const lastSpan = tspans[tspans.length - 1];
+      return c.cx <= cx[lastSpan[1][1]] + colW * spill ? lastSpan[0] : null;
     };
     const bins = {};
     for (const c of comps) {
@@ -758,15 +859,22 @@
     const lay = LAYOUTS[sh.layout] || LAYOUTS['18m3'];
     const glyphsOf = cellGlyphs(cv, can, W, n, lay.id, sh.hasTotal);
     const rows = [];
+    const empty = { v: null, conf: 1 };
     for (let r = 0; r < sh.nrows; r++) {
-      rows.push({
+      const second = !lay.pairs || r % 2 === 1; // Ianseo: end and running total only on the second row
+      const row = {
         arrows: lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k))),
         // a serie or running total below 10 is very unusual: prefer reading two digits
         sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2),
-        cum: lay.cum ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2) : { v: null, conf: 1 }
-      });
+        cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2) : empty
+      };
+      if (lay.end) row.end = second ? readNumber(predict, glyphsOf(r, 'end'), 2, 2) : empty;
+      if (lay.tx) row.tx = readNumber(predict, glyphsOf(r, 'tx'), 1, 1);
+      if (lay.xx) row.xx = readNumber(predict, glyphsOf(r, 'xx'), 1, 1);
+      rows.push(row);
     }
     let total = null;
+    const totals = {};
     if (sh.hasTotal) {
       // the written total is one group of digits; a far-off mark (paper edge, signature) is not part of it
       const gs = glyphsOf(sh.nrows, 'total'), groups = [];
@@ -778,8 +886,13 @@
       // most digits wins; on a tie the group nearest the 'Totaal' label (leftmost)
       const main = groups.sort((a, b) => b.items.length - a.items.length || a.items[0].x - b.items[0].x)[0];
       total = readNumber(predict, main ? main.items : [], 3, 3);
+      if (lay.ttx) totals.ttx = readNumber(predict, glyphsOf(sh.nrows, 'ttx'), 2, 1);
+      if (lay.txx) totals.txx = readNumber(predict, glyphsOf(sh.nrows, 'txx'), 2, 1);
     }
-    const out = { rows, total, T, Tinv: inv3(T), W, H, cols: lay.cols, spans: { arrows: lay.arrows, sub: lay.sub, cum: lay.cum, total: lay.total, row: [0, (lay.cum || lay.sub)[1]] }, step: lay.step };
+    const rightEdge = Math.max(...layoutFields(lay).map(([, sp]) => sp[1]));
+    const out = { rows, total, totals, T, Tinv: inv3(T), W, H, cols: lay.cols,
+      spans: { arrows: lay.arrows, sub: lay.sub, cum: lay.cum, end: lay.end || null, tx: lay.tx || null, xx: lay.xx || null,
+        total: lay.total, ttx: lay.ttx || null, txx: lay.txx || null, row: [0, rightEdge] }, step: lay.step, pairs: !!lay.pairs };
     if (opts && opts.canon) { out.canon = Uint8Array.from(can.data); out.cw = can.cols; out.ch = can.rows; }
     can.delete();
     return out;

@@ -1,7 +1,7 @@
 /* Bump CACHE (and VERSION in index.html) on every release. 'reload' skips the browser's HTTP cache,
    so a new release never caches files that GitHub Pages still serves from its 10-minute cache.
    Offline cache: after the first visit the app also works without internet (sporthal). */
-const CACHE = 'scorebriefje-v17';
+const CACHE = 'scorebriefje-v18';
 const FILES = ['./', 'index.html', 'app.js', 'scoring.js', 'worker.js', 'vision.js', 'weights.json', 'opencv.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())); });

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const { evaluate } = self.Scoring;
+  const { evaluate, evaluateIanseo } = self.Scoring;
 
   const ROWH = 40, PAD = 20;
   const MODES = { '3': '3 pijlen', '6': '6 pijlen', '25': '25M1P' };
@@ -27,12 +27,13 @@
   const I18N = {
     nl: {
       segAria: 'Pijlen per serie', m25Title: '25 meter 1 pijl: 5 series van 5 pijlen', m25Auto: '25M1P automatisch herkend',
+      m6Title: '6 pijlen per serie (2 regels van 3)', m6Auto: 'Ianseo-briefje herkend: series van 6 pijlen', sum: 'Som', tenX: '10+X', x: 'X',
       torch: 'Lamp', photo: 'Foto', training: 'Trainingsdata', freeze: 'Vastzetten', resume: 'Doorgaan', camera: 'Camera',
       targetAria: 'Doelpak met drie pijlen in de 10, de 9 en de 8',
-      intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Werkt voor 18 m (3 of 6 pijlen) en 25 m 1 pijl; dat laatste wordt vanzelf herkend.',
+      intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Werkt voor 18 m (3 of 6 pijlen), 25 m 1 pijl en Ianseo-briefjes voor outdoor; die laatste twee worden vanzelf herkend.',
       exampleAria: 'Voorbeeld: regel 3, pijlen 10, 9 en 8, serie 27 klopt',
       loading: 'Herkenning laden…', ready: 'Klaar. De herkenning werkt op je telefoon zelf, er gaat niets naar internet.',
-      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 17 · 2 november 2026',
+      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 18 · 2 november 2026',
       needHttps: 'De camera werkt alleen als de app via https geopend is.',
       noCamAccess: 'Geen toegang tot de camera. Sta camera-toegang toe voor deze site in de browserinstellingen.',
       camFail: 'De camera kon niet starten ({e}).',
@@ -52,12 +53,13 @@
     },
     en: {
       segAria: 'Arrows per end', m25Title: '25 metres one spot: 5 ends of 5 arrows', m25Auto: '25M1P detected automatically',
+      m6Title: '6 arrows per end (2 rows of 3)', m6Auto: 'Ianseo card detected: ends of 6 arrows', sum: 'Sum', tenX: '10+X', x: 'X',
       torch: 'Torch', photo: 'Photo', training: 'Training data', freeze: 'Freeze', resume: 'Resume', camera: 'Camera',
       targetAria: 'Target face with three arrows in the 10, the 9 and the 8',
-      intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Works for 18 m (3 or 6 arrows per end) and 25 m one spot; the latter is recognised automatically.',
+      intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Works for 18 m (3 or 6 arrows per end), 25 m one spot and Ianseo outdoor cards; the last two are recognised automatically.',
       exampleAria: 'Example: row 3, arrows 10, 9 and 8, end total 27 is correct',
       loading: 'Loading recognition…', ready: 'Ready. Recognition runs on your phone itself; nothing is sent to the internet.',
-      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 17 · 2 November 2026',
+      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 18 · 2 November 2026',
       needHttps: 'The camera only works when the app is opened over https.',
       noCamAccess: 'No access to the camera. Allow camera access for this site in your browser settings.',
       camFail: 'The camera could not start ({e}).',
@@ -154,7 +156,7 @@
   }
   function send(img, canon) {
     S.busy = true; S.frameId++;
-    const layouts = S.mode === 25 ? ['25m1p'] : ['18m3', '25m1p'];
+    const layouts = S.mode === 25 ? ['25m1p'] : ['18m3', '25m1p', 'ianseo'];
     worker.postMessage({ type: 'frame', id: S.frameId, buffer: img.data.buffer, width: img.width, height: img.height, canon, layouts }, [img.data.buffer]);
   }
   function loop() {
@@ -180,6 +182,19 @@
     if (bc >= VOTE_MIN && bc >= h.length / 2) S.vals.set(key, best);
   }
   const cellVal = (r, kind) => r.v === null ? null : (r.conf < CONF[kind] ? '?' : r.v);
+  /* The number cells of a row (or of the total row, ri = 't') as [field, label]. On an Ianseo card the
+     end total and running total are only on the second row of each pair. */
+  function numFields(g, ri) {
+    if (ri === 't') return [['t', 'total']].concat(g.spans.ttx ? [['ttx', 'tenX']] : [], g.spans.txx ? [['txx', 'x']] : []);
+    const second = !g.pairs || +ri % 2 === 1;
+    const f = [['sub', g.pairs ? 'sum' : 'end']];
+    if (g.spans.end && second) f.push(['end', 'end']);
+    if (g.spans.cum && second) f.push(['cum', 'total']);
+    if (g.spans.tx) f.push(['tx', 'tenX']);
+    if (g.spans.xx) f.push(['xx', 'x']);
+    return f;
+  }
+  const keyOf = (si, ri, f) => ri === 't' ? `${si}:${f}` : `${si}:${ri}:${f}`;
 
   function center(q) { return { x: (q[0].x + q[1].x + q[2].x + q[3].x) / 4, y: (q[0].y + q[1].y + q[2].y + q[3].y) / 4 }; }
 
@@ -199,14 +214,19 @@
       const sameCard = S.geo.length && res.sheets.length === S.geo.length && res.sheets.every((sh, i) => sh.nrows === S.geo[i].nrows && sh.layout === S.geo[i].layout);
       if (instant || (moved && !sameCard)) resetAll();
       S.frameW = res.width; S.frameH = res.height;
-      S.geo = res.sheets.map(sh => ({ quad: sh.quad, Tinv: sh.Tinv, W: sh.W, H: sh.H, nrows: sh.nrows, hasTotal: sh.hasTotal, layout: sh.layout, cols: sh.cols, spans: sh.spans, step: sh.step }));
+      S.geo = res.sheets.map(sh => ({ quad: sh.quad, Tinv: sh.Tinv, W: sh.W, H: sh.H, nrows: sh.nrows, hasTotal: sh.hasTotal, layout: sh.layout, cols: sh.cols, spans: sh.spans, step: sh.step, pairs: !!sh.pairs }));
       res.sheets.forEach((sh, si) => {
         sh.rows.forEach((r, ri) => {
           r.arrows.forEach((a, k) => vote(`${si}:${ri}:a${k}`, cellVal(a, 'arrow'), instant, a.conf));
-          vote(`${si}:${ri}:sub`, cellVal(r.sub, 'num'), instant, r.sub.conf); keepCands(`${si}:${ri}:sub`, r.sub.cands);
-          if (sh.spans.cum) { vote(`${si}:${ri}:cum`, cellVal(r.cum, 'num'), instant, r.cum.conf); keepCands(`${si}:${ri}:cum`, r.cum.cands); }
+          for (const [f] of numFields(S.geo[si], ri)) {
+            const c = r[f]; if (!c) continue;
+            vote(keyOf(si, ri, f), cellVal(c, 'num'), instant, c.conf); keepCands(keyOf(si, ri, f), c.cands);
+          }
         });
-        if (sh.hasTotal && sh.total) { vote(`${si}:t`, cellVal(sh.total, 'num'), instant); keepCands(`${si}:t`, sh.total.cands); }
+        if (sh.hasTotal) for (const [f] of numFields(S.geo[si], 't')) {
+          const c = f === 't' ? sh.total : sh.totals && sh.totals[f]; if (!c) continue;
+          vote(keyOf(si, 't', f), cellVal(c, 'num'), instant); keepCands(keyOf(si, 't', f), c.cands);
+        }
       });
       S.lastResult = res;
     } else if (instant) {
@@ -221,21 +241,25 @@
   const get = key => S.over.has(key) ? S.over.get(key) : S.vals.get(key);
   function sheetModel(si) {
     const g = S.geo[si]; const rows = []; const stable = [];
-    const na = g.spans.arrows.length, hasCum = !!g.spans.cum;
-    const keys = g.spans.arrows.map((_, k) => 'a' + k).concat(['sub'], hasCum ? ['cum'] : []);
+    const na = g.spans.arrows.length, isIan = g.layout === 'ianseo', is25 = g.layout === '25m1p';
+    const val = k => { const v = get(k); return v === undefined ? null : v; };
     for (let ri = 0; ri < g.nrows; ri++) {
-      const f = keys.map(k => get(`${si}:${ri}:${k}`));
-      stable.push(f.every(v => v !== undefined));
-      rows.push({ label: String((ri + 1) * g.step), arrows: f.slice(0, na).map(v => v === undefined ? null : v), sub: f[na] ?? null, cum: hasCum ? (f[na + 1] ?? null) : null });
+      const keys = g.spans.arrows.map((_, k) => 'a' + k).concat(numFields(g, ri).map(([f]) => f));
+      stable.push(keys.every(k => get(`${si}:${ri}:${k}`) !== undefined));
+      const label = isIan ? (ri % 2 === 0 ? String(ri / 2 + 1) : '') : String((ri + 1) * g.step);
+      const row = { label, arrows: g.spans.arrows.map((_, k) => val(`${si}:${ri}:a${k}`)), sub: val(`${si}:${ri}:sub`), cum: g.spans.cum ? val(`${si}:${ri}:cum`) : null };
+      if (isIan) { row.end = val(`${si}:${ri}:end`); row.tx = val(`${si}:${ri}:tx`); row.xx = val(`${si}:${ri}:xx`); }
+      rows.push(row);
     }
-    const tv = get(`${si}:t`);
-    const sheet = { rows, total: g.hasTotal ? { value: tv ?? null } : null };
-    const is25 = g.layout === '25m1p';
-    const ev = evaluate(sheet, is25 ? 3 : S.mode, { noCum: !hasCum });
-    if (!is25 && S.mode === 3) crossCheck(si, sheet, ev);
+    const tkeys = g.hasTotal ? numFields(g, 't').map(([f]) => keyOf(si, 't', f)) : [];
+    const sheet = { rows, total: g.hasTotal ? { value: val(`${si}:t`) } : null };
+    if (isIan) sheet.totals = { ttx: val(`${si}:ttx`), txx: val(`${si}:txx`) };
+    const ev = isIan ? evaluateIanseo(sheet) : evaluate(sheet, is25 ? 3 : S.mode, { noCum: !g.spans.cum });
+    if (isIan) ianCrossCheck(si, sheet, ev);
+    else if (!is25 && S.mode === 3) crossCheck(si, sheet, ev);
     verifyCells(si, ev);
-    const allStable = stable.every(Boolean) && (!g.hasTotal || tv !== undefined);
-    return { sheet, ev, stable, allStable, is25 };
+    const allStable = stable.every(Boolean) && tkeys.every(k => get(k) !== undefined);
+    return { sheet, ev, stable, allStable, is25, isIan };
   }
 
   /* A reading error and a scoring error look the same in one cell. The neighbouring cells tell them
@@ -262,18 +286,44 @@
     });
   }
 
+  /* Ianseo: per end of 6 the card has two sums, the end total and the running total. When those written
+     numbers agree with each other (sum + sum = end, previous total + end = total) but not with the arrows
+     as read, an arrow was most likely misread: "controleer" (amber) instead of "fout" (red). A running
+     total that is right given the previous written total only inherits an earlier difference: amber too. */
+  function ianCrossCheck(si, sheet, ev) {
+    const num = v => (v !== null && /^\d+$/.test(v)) ? +v : null;
+    const rows = sheet.rows;
+    const manual = (i, k) => S.over.has(`${si}:${i}:${k}`);
+    const arrowsSure = i => rows[i].arrows.every((_, k) => manual(i, 'a' + k));
+    let prev = 0, lastCum = null;
+    for (let a = 0; a + 1 < rows.length; a += 2) {
+      const b = a + 1, ra = ev.res[a], rb = ev.res[b];
+      if (ra.role === 'unused') continue;
+      const wa = num(rows[a].sub), wb = num(rows[b].sub), we = num(rows[b].end), wc = num(rows[b].cum);
+      const chain = wa !== null && wb !== null && we !== null && wa + wb === we && (wc === null || prev === null || prev + we === wc);
+      const soft = (r, i, f) => { if (r[f] && r[f].st === 'bad' && !manual(i, f)) r[f].st = 'warn'; };
+      if (chain && !(arrowsSure(a) && arrowsSure(b))) { soft(ra, a, 'sub'); soft(rb, b, 'sub'); soft(rb, b, 'end'); soft(rb, b, 'cum'); }
+      const exp = rb.end && !Number.isNaN(rb.end.exp) ? rb.end.exp : null;
+      if (rb.cum && rb.cum.st === 'bad' && prev !== null && exp !== null && prev + exp === wc) soft(rb, b, 'cum');
+      prev = wc; lastCum = rb.cum;
+    }
+    // the total only repeats the last running total
+    if (ev.total && ev.total.st === 'bad' && !S.over.has(`${si}:t`) && lastCum && lastCum.st === 'warn' && num(sheet.total.value) === prev) ev.total.st = 'warn';
+  }
+
   /* The app checks rather than reads: if the correct value is also a plausible reading of the
      handwriting (at least 20% as likely as the best reading), the cell counts as correct. A real
      mistake is only flagged when the handwriting clearly says something else. Corrected cells are trusted. */
   const VERIFY_REL = 0.2;
+  const CELLS = ['sub', 'end', 'cum', 'tx', 'xx'];
   function verifyCells(si, ev) {
     const check = (key, c) => {
       if (!c || (c.st !== 'bad' && c.st !== 'warn') || Number.isNaN(c.exp) || S.over.has(key)) return;
       const m = S.cands.get(key);
       if (m && (m.get(String(c.exp)) || 0) >= VERIFY_REL) { c.st = 'ok'; c.w = c.exp; }
     };
-    ev.res.forEach((r, ri) => { check(`${si}:${ri}:sub`, r.sub); check(`${si}:${ri}:cum`, r.cum); });
-    check(`${si}:t`, ev.total);
+    ev.res.forEach((r, ri) => { for (const f of CELLS) check(`${si}:${ri}:${f}`, r[f]); });
+    check(`${si}:t`, ev.total); check(`${si}:ttx`, ev.ttx); check(`${si}:txx`, ev.txx);
   }
 
   /* ---------------------------------------------------------------- overlay */
@@ -311,10 +361,11 @@
       for (let ri = 0; ri < g.nrows; ri++) {
         upTo = upTo && stable[ri];
         const r = ev.res[ri];
-        if (stable[ri]) marker(c, cellQuad(g, 'sub', ri, f2s), r.sub);
+        if (stable[ri]) for (const f of ['sub', 'end', 'tx', 'xx']) if (g.spans[f]) marker(c, cellQuad(g, f, ri, f2s), r[f]);
         if (upTo && g.spans.cum) marker(c, cellQuad(g, 'cum', ri, f2s), r.cum);
       }
-      if (g.hasTotal && upTo && ev.total && get(`${si}:t`) !== undefined) marker(c, cellQuad(g, 'total', g.nrows, f2s), ev.total);
+      if (g.hasTotal && upTo) for (const [f, sp, k] of [['total', 'total', 't'], ['ttx', 'ttx', 'ttx'], ['txx', 'txx', 'txx']])
+        if (g.spans[sp] && ev[f] && get(`${si}:${k}`) !== undefined) marker(c, cellQuad(g, sp, g.nrows, f2s), ev[f]);
     });
   }
   function poly(c, q) { c.beginPath(); c.moveTo(q[0].x, q[0].y); for (let i = 1; i < q.length; i++) c.lineTo(q[i].x, q[i].y); c.closePath(); }
@@ -345,14 +396,18 @@
   function render() {
     // a 25m1p sheet is recognised by itself; show that in the switch without changing the chosen mode
     const auto25 = S.mode !== 25 && S.geo.length > 0 && S.geo.every(g => g.layout === '25m1p');
-    const shown = auto25 ? 25 : S.mode;
+    // an Ianseo card is always counted per 6 arrows: show '6 auto'
+    const autoIan = S.mode !== 6 && S.mode !== 25 && S.geo.length > 0 && S.geo.every(g => g.layout === 'ianseo');
+    const shown = auto25 ? 25 : autoIan ? 6 : S.mode;
     $('m3').setAttribute('aria-pressed', shown === 3); $('m6').setAttribute('aria-pressed', shown === 6); $('m25').setAttribute('aria-pressed', shown === 25);
     $('m25').classList.toggle('auto', auto25);
     $('m25').title = auto25 ? t('m25Auto') : t('m25Title');
+    $('m6').classList.toggle('auto', autoIan);
+    $('m6').title = autoIan ? t('m6Auto') : t('m6Title');
     drawOverlay();
     const chips = S.geo.map((g, si) => {
-      const { ev, allStable, is25 } = sheetModel(si);
-      const all = ev.res.flatMap(r => [r.sub, r.cum]).concat([ev.total]).filter(Boolean);
+      const { ev, allStable, is25, isIan } = sheetModel(si);
+      const all = ev.res.flatMap(r => CELLS.map(f => r[f])).concat([ev.total, ev.ttx, ev.txx]).filter(Boolean);
       const n = st => all.filter(x => x.st === st).length;
       let cls, txt;
       if (!allStable && !S.frozen) { cls = 'wait'; txt = t('reading'); }
@@ -360,7 +415,7 @@
       else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = t('check'); }
       else if (n('miss')) { cls = 'miss'; txt = t('fill', { n: n('miss') }); }
       else { cls = 'ok'; txt = t('ok'); }
-      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
+      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : isIan ? ' · Ianseo' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
     });
     $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? t('noTable') : t('searching')}</div></div>`;
     if (S.frozen) renderDetail();
@@ -379,17 +434,27 @@
   }
   function renderDetail() {
     const html = S.geo.map((g, si) => {
-      const { sheet, ev, is25 } = sheetModel(si);
+      const { sheet, ev, is25, isIan } = sheetModel(si);
+      // columns after the arrows: [header, field]
+      const cols = isIan ? [['sum', 'sub'], ['end', 'end'], ['total', 'cum'], ['tenX', 'tx'], ['x', 'xx']]
+        : [['end', 'sub']].concat(is25 ? [] : [['total', 'cum']]);
       const rows = sheet.rows.map((r, ri) => {
         const rr = ev.res[ri];
-        if (rr.role === 'unused' && !rr.sub && !rr.cum && r.arrows.every(a => a === null)) return '';
+        if (rr.role === 'unused' && !CELLS.some(f => rr[f]) && r.arrows.every(a => a === null)) return '';
         const ar = r.arrows.map(a => `<span class="a${a === '?' ? ' q' : ''}">${a === null ? '·' : esc(a)}</span>`).join('');
-        return `<tr data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td>${ar}</td><td>${cellHtml(rr.sub)}</td>${is25 ? '' : `<td>${cellHtml(rr.cum)}</td>`}</tr>`;
+        const cls = isIan && ri % 2 === 0 && ri > 0 ? ' class="ps"' : '';
+        return `<tr${cls} data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td class="ar">${ar}</td>${cols.map(([, f]) => `<td>${cellHtml(rr[f])}</td>`).join('')}</tr>`;
       }).join('');
-      const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>${t('total')}</td>${is25 ? '' : '<td></td>'}<td>${cellHtml(ev.total)}</td></tr>` : '';
-      return `<div class="card" id="card${si}"><h2><span>${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} ${t('of')} ${ev.arrows * 10}</span></h2>
+      let tot = '';
+      if (ev.total) {
+        const tcell = { sub: null, end: null, cum: ev.total, tx: ev.ttx, xx: ev.txx };
+        const tc = is25 ? [['', 'cum']] : cols; // 25m1p: total sits under the end column
+        tot = `<tr class="ps" data-si="${si}" data-ri="t"><td class="pl"></td><td>${t('total')}</td>${tc.map(([, f]) => `<td>${cellHtml(tcell[f])}</td>`).join('')}</tr>`;
+      }
+      const tag = is25 ? ' · 25M1P' : isIan ? ' · Ianseo' : '';
+      return `<div class="card" id="card${si}"><h2><span>${t('sheet')} ${si + 1}${tag}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} ${t('of')} ${ev.arrows * 10}</span></h2>
         <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>${t('tens')} <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
-        <table><thead><tr><th>${t(is25 ? 'colRow25' : 'colRow18')}</th><th>${t('arrows')}</th><th>${t('end')}</th>${is25 ? '' : `<th>${t('total')}</th>`}</tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
+        <div class="tw"><table${isIan ? ' class="ian"' : ''}><thead><tr><th>${t(is25 || isIan ? 'colRow25' : 'colRow18')}</th><th>${t('arrows')}</th>${cols.map(([h]) => `<th>${t(h)}</th>`).join('')}</tr></thead><tbody>${rows}${tot}</tbody></table></div></div>`;
     }).join('');
     $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">' + esc(t('tapRow')) + '</p>';
   }
@@ -589,44 +654,40 @@
       for (let ri = 0; ri <= g.nrows; ri++) {
         if (ri === g.nrows && !g.hasTotal) break;
         const q = cellQuad(g, 'row', ri, f2s);
-        const extra = ri === g.nrows ? cellQuad(g, 'total', ri, f2s) : cellQuad(g, g.spans.cum ? 'cum' : 'sub', ri, f2s);
-        if (inside(q, px, py) || inside(extra, px, py)) { openEditor(si, ri === g.nrows ? 't' : String(ri)); return; }
+        const extras = ri === g.nrows ? ['total', 'ttx', 'txx'].filter(f => g.spans[f]) : [g.spans.cum ? 'cum' : 'sub'];
+        if (inside(q, px, py) || extras.some(f => inside(cellQuad(g, f, ri, f2s), px, py))) { openEditor(si, ri === g.nrows ? 't' : String(ri)); return; }
       }
     }
   };
   function inside(q, x, y) { let c = false; for (let i = 0, j = 3; i < 4; j = i++) { if (((q[i].y > y) !== (q[j].y > y)) && x < (q[j].x - q[i].x) * (y - q[i].y) / (q[j].y - q[i].y) + q[i].x) c = !c; } return c; }
 
   function openEditor(si, ri) {
-    editing = { si, ri };
+    const g = S.geo[si];
     const show = v => v === null || v === undefined ? '' : v;
+    const fields = numFields(g, ri);
+    editing = { si, ri, fields };
     if (ri === 't') {
       $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t('dlgTotal')}`;
-      $('dlgArrows').innerHTML = ''; $('dlgArrows').hidden = true; $('dlgSub').parentElement.hidden = true; $('dlgCum').parentElement.hidden = false;
-      $('dlgCum').value = show(get(`${si}:t`));
+      $('dlgArrows').innerHTML = ''; $('dlgArrows').hidden = true;
     } else {
-      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t('dlgRow')} ${(+ri + 1) * 3}`;
-      $('dlgArrows').hidden = false; $('dlgSub').parentElement.hidden = false;
-      const g = S.geo[si], na = g.spans.arrows.length;
-      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t(g.layout === '25m1p' ? 'dlgEnd' : 'dlgRow')} ${(+ri + 1) * g.step}`;
+      const na = g.spans.arrows.length, r = +ri;
+      const what = g.pairs ? `${t('dlgEnd')} ${(r >> 1) + 1} (${r % 2 + 1}/2)` : `${t(g.layout === '25m1p' ? 'dlgEnd' : 'dlgRow')} ${(r + 1) * g.step}`;
+      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${what}`;
+      $('dlgArrows').hidden = false;
       $('dlgArrows').style.gridTemplateColumns = `repeat(${na}, 1fr)`;
       $('dlgArrows').innerHTML = Array.from({ length: na }, (_, k) =>  `<label>${t('arrowN', { n: k + 1 })}<input id="dlgA${k}" maxlength="2" value="${esc(show(get(`${si}:${ri}:a${k}`)))}"></label>`).join('');
-      $('dlgSub').value = show(get(`${si}:${ri}:sub`)); $('dlgCum').value = show(get(`${si}:${ri}:cum`));
-      $('dlgCum').parentElement.hidden = !g.spans.cum;
     }
+    $('dlgNums').style.gridTemplateColumns = fields.length > 2 ? 'repeat(3, 1fr)' : '1fr 1fr';
+    $('dlgNums').innerHTML = fields.map(([f, lab]) => `<label><span>${esc(t(lab))}</span><input id="dlgN_${f}" inputmode="numeric" value="${esc(show(get(keyOf(si, ri, f))))}"></label>`).join('');
     $('dlg').showModal();
   }
   const clean = v => { const s = v.trim().toUpperCase(); return s === '' ? null : s; };
   $('dlgCancel').onclick = () => $('dlg').close();
   $('dlgForm').onsubmit = e => {
     e.preventDefault();
-    const { si, ri } = editing;
-    if (ri === 't') S.over.set(`${si}:t`, clean($('dlgCum').value));
-    else {
-      const g = S.geo[si];
-      g.spans.arrows.forEach((_, k) => S.over.set(`${si}:${ri}:a${k}`, clean($(`dlgA${k}`).value)));
-      S.over.set(`${si}:${ri}:sub`, clean($('dlgSub').value));
-      if (g.spans.cum) S.over.set(`${si}:${ri}:cum`, clean($('dlgCum').value));
-    }
+    const { si, ri, fields } = editing;
+    if (ri !== 't') S.geo[si].spans.arrows.forEach((_, k) => S.over.set(`${si}:${ri}:a${k}`, clean($(`dlgA${k}`).value)));
+    for (const [f] of fields) S.over.set(keyOf(si, ri, f), clean($('dlgN_' + f).value));
     $('dlg').close(); render();
   };
 
@@ -646,7 +707,7 @@
       for (let i = 0; i < sh.canon.length; i++) { const v = sh.canon[i]; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
       cx.putImageData(id, 0, 0);
       const model = si < S.geo.length ? sheetModel(si).sheet : null;
-      return { image: c.toDataURL('image/png'), layout: sh.layout, rowHeight: ROWH, pad: PAD, gridWidth: sh.W, columns: sh.cols, rowsInImage: sh.nrows + (sh.hasTotal ? 1 : 0), hasTotal: sh.hasTotal, rows: model ? model.rows : [], total: model && model.total ? model.total.value : null };
+      return { image: c.toDataURL('image/png'), layout: sh.layout, rowHeight: ROWH, pad: PAD, gridWidth: sh.W, columns: sh.cols, rowsInImage: sh.nrows + (sh.hasTotal ? 1 : 0), hasTotal: sh.hasTotal, rows: model ? model.rows : [], total: model && model.total ? model.total.value : null, totals: model && model.totals ? model.totals : null };
     });
     const blob = new Blob([JSON.stringify({ app: 'scorebriefje-live', version: 1, created: new Date().toISOString(), sheets })], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);

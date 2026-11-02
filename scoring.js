@@ -84,5 +84,75 @@
     return { res, cum, total, hits, tens, xs, arrows, unreadable, ends: groups.length };
   }
 
-  root.Scoring = { evaluate, arrowVal, numVal };
+  /* Ianseo outdoor card: two rows of 3 arrows form one end of 6.
+     Every row: Sum (3 arrows), 10+X (number of tens incl. X), X (number of X).
+     Second row of a pair: end total (6 arrows) and running total.
+     Total row: total score, total 10+X and total X.
+     A blank 10+X or X cell is fine when the count is 0. */
+  function countCmp(written, n) {
+    const w = numVal(written);
+    if (Number.isNaN(n)) return w === null ? null : { st: 'warn', exp: NaN, w };
+    if (w === null) return n === 0 ? null : { st: 'miss', exp: n, w };
+    if (Number.isNaN(w)) return { st: 'warn', exp: n, w };
+    return { st: w === n ? 'ok' : 'bad', exp: n, w };
+  }
+  function evaluateIanseo(sheet) {
+    const rows = sheet.rows;
+    // a row always has 3 arrows (a miss is written as M): an empty box next to filled ones was not read
+    const gap = arr => arr.some(a => arrowVal(a) === null) && arr.some(a => arrowVal(a) !== null);
+    const badI = arr => bad(arr) || gap(arr);
+    // no arrows read but a sum written: the arrows were not read either
+    const unread = r => badI(r.arrows) || (!used(r) && numVal(r.sub) !== null);
+    const res = rows.map(() => ({ sub: null, end: null, cum: null, tx: null, xx: null, role: 'unused' }));
+    let cum = 0, hits = 0, tens = 0, xs = 0, arrows = 0, unreadable = false, ends = 0, any = false;
+    let tTen = 0, tX = 0;
+    for (let p = 0; p < rows.length; p += 2) {
+      const pair = [p, p + 1].filter(i => i < rows.length);
+      if (!pair.some(i => used(rows[i]))) {
+        // nothing shot here: only flag numbers that are written anyway
+        pair.forEach(i => { for (const f of ['sub', 'end', 'cum', 'tx', 'xx']) { const w = numVal(rows[i][f]); if (w !== null && w !== 0) res[i][f] = { st: 'warn', exp: NaN, w }; } });
+        continue;
+      }
+      any = true; ends++;
+      for (const i of pair) {
+        const r = rows[i];
+        res[i].role = i === p ? 'pairStart' : 'end';
+        let ten = 0, x = 0, broken = gap(r.arrows) || (!used(r) && numVal(r.sub) !== null);
+        if (broken) unreadable = true;
+        for (const a of r.arrows) {
+          const v = arrowVal(a); if (v === null) continue;
+          arrows++;
+          if (Number.isNaN(v)) { unreadable = true; broken = true; continue; }
+          if (v > 0) hits++;
+          if (v === 10) { tens++; ten++; }
+          if (String(a).trim().toUpperCase() === 'X') { xs++; x++; }
+        }
+        if (used(r) || numVal(r.sub) !== null) res[i].sub = compare(r.sub, unread(r) ? NaN : sum(r.arrows));
+        if (used(r)) {
+          res[i].tx = countCmp(r.tx, broken ? NaN : ten);
+          res[i].xx = countCmp(r.xx, broken ? NaN : x);
+        }
+        // an unreadable arrow: continue with what is written (blank = 0), like the running total
+        const w = v => { const n = numVal(v); return n === null ? 0 : n; };
+        tTen += broken ? w(r.tx) : ten;
+        tX += broken ? w(r.xx) : x;
+      }
+      const exp = pair.some(i => unread(rows[i])) ? NaN : pair.reduce((t, i) => t + sum(rows[i].arrows), 0);
+      const second = pair[pair.length - 1];
+      cum += carry(exp, rows[second].end);
+      // the second half of the end not shot yet: nothing to check there
+      const open = !used(rows[second]) && numVal(rows[second].sub) === null && numVal(rows[second].end) === null && numVal(rows[second].cum) === null;
+      if (second !== p && !open) {
+        res[second].end = compare(rows[second].end, exp);
+        res[second].cum = compare(rows[second].cum, cum);
+      }
+    }
+    const tot = sheet.totals || {};
+    const total = any && sheet.total ? compare(sheet.total.value, cum) : null;
+    const ttx = any && sheet.total ? countCmp(tot.ttx, tTen) : null;
+    const txx = any && sheet.total ? countCmp(tot.txx, tX) : null;
+    return { res, cum, total, ttx, txx, hits, tens, xs, arrows, unreadable, ends };
+  }
+
+  root.Scoring = { evaluate, evaluateIanseo, arrowVal, numVal };
 })(typeof self !== 'undefined' ? self : globalThis);
