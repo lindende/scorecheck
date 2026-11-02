@@ -68,14 +68,26 @@ td.pl{color:var(--muted);width:3em}
 .counts{display:flex;gap:14px;padding:8px 12px;color:var(--muted);font-size:13px}
 .counts b{color:var(--fg);font-family:var(--mono)}
 
-.start{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:18px;background:var(--bg);
-  padding:24px max(24px,env(safe-area-inset-right,0px)) 24px max(24px,env(safe-area-inset-left,0px))}
-.start h1{font-size:30px;margin:0;line-height:1.1}
-.start p{color:var(--muted);margin:0;max-width:34em}
+.start{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:16px;background:
+  radial-gradient(120% 70% at 50% 0%, #1b2430 0%, var(--bg) 60%);overflow-y:auto;
+  padding:calc(24px + env(safe-area-inset-top,0px)) max(24px,env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) max(24px,env(safe-area-inset-left,0px))}
+.start > *{width:100%;max-width:440px;margin-left:auto;margin-right:auto}
+.start h1{font-size:30px;margin:0;line-height:1.1;letter-spacing:.01em}
+.start p{color:var(--muted);margin:0}
 .start .err{color:var(--bad)}
 .start .btn{flex:none}
+.target{display:block;width:min(64vw,250px);height:auto;margin:0 auto 4px;overflow:visible}
+.target .arrow{animation:land .55s cubic-bezier(.2,.9,.3,1.25) both}
+.target .a2{animation-delay:.35s}.target .a3{animation-delay:.7s}
+@keyframes land{from{transform:translate(70px,90px);opacity:0}to{transform:none;opacity:1}}
+.end{display:grid;grid-template-columns:2.4em repeat(3,1fr) 1.4fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;font:600 17px var(--mono);font-variant-numeric:tabular-nums}
+.end span{padding:8px 0;text-align:center;border-left:1px solid var(--line)}
+.end span:first-child{border-left:0;color:var(--muted);font-size:13px;align-self:center}
+.end .tot{color:var(--ok);background:rgba(46,204,113,.1)}
+.end .tot::after{content:" ✓";font-size:14px}
 .progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
-.progress i{display:block;height:100%;width:0;background:var(--ink);transition:width .3s}
+.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,#f65058,#ffe552);transition:width .3s}
+@media (prefers-reduced-motion:reduce){.target .arrow{animation:none}}
 
 dialog{border:0;padding:0;background:transparent;width:100%;max-width:520px;margin:auto auto 0;color:var(--fg)}
 dialog::backdrop{background:rgba(0,0,0,.6)}
@@ -123,13 +135,15 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </section>
 
 <div class="start" id="start">
+  <svg class="target" viewBox="-6 -6 212 212" role="img" aria-label="Doelpak met drie pijlen in 10, 9 en 8"><circle cx="100" cy="100" r="100" fill="#ffffff" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="90" fill="#ffffff" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="80" fill="#111418" stroke="#ffffff" stroke-width="0.8"/><circle cx="100" cy="100" r="70" fill="#111418" stroke="#ffffff" stroke-width="0.6"/><circle cx="100" cy="100" r="60" fill="#00b4e4" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="50" fill="#00b4e4" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="40" fill="#f65058" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="30" fill="#f65058" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="20" fill="#ffe552" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="10" fill="#ffe552" stroke="#1a1d22" stroke-width="0.6"/><circle cx="100" cy="100" r="5" fill="none" stroke="#1a1d22" stroke-width="0.5"/><path d="M98.6 100h2.8M100 98.6v2.8" stroke="#1a1d22" stroke-width="0.5"/><g class="arrow a1"><circle cx="103" cy="97" r="1.8" fill="#0b0d10" opacity=".55"/><line x1="103" y1="97" x2="127.0" y2="131.0" stroke="#1c222b" stroke-width="2.6" stroke-linecap="round"/><line x1="104.2" y1="98.6" x2="125.3" y2="128.5" stroke="#8793a3" stroke-width="0.6" transform="translate(0.57 -0.40)"/><path d="M119.5 120.4 Q118.0 128.8 121.6 132.9 L126.4 130.2 Z" fill="#ff7a1a"/><path d="M119.5 120.4 Q127.9 121.8 130.6 126.6 L126.4 130.2 Z" fill="#ff7a1a" opacity=".8"/><path d="M119.5 120.4 Q122.9 125.3 126.1 129.8 L126.4 130.2 Z" fill="#f2f4f7"/><line x1="126.4" y1="130.2" x2="128.4" y2="133.0" stroke="#f2f4f7" stroke-width="2.8" stroke-linecap="round"/></g><g class="arrow a2"><circle cx="88" cy="108" r="1.8" fill="#0b0d10" opacity=".55"/><line x1="88" y1="108" x2="103.0" y2="145.0" stroke="#1c222b" stroke-width="2.6" stroke-linecap="round"/><line x1="88.8" y1="109.9" x2="101.9" y2="142.2" stroke="#8793a3" stroke-width="0.6" transform="translate(0.65 -0.26)"/><path d="M98.1 133.0 Q94.8 140.8 97.3 145.7 L102.6 144.1 Z" fill="#f2f4f7"/><path d="M98.1 133.0 Q106.0 136.2 107.5 141.5 L102.6 144.1 Z" fill="#f2f4f7" opacity=".8"/><path d="M98.1 133.0 Q100.3 138.6 102.3 143.6 L102.6 144.1 Z" fill="#ff7a1a"/><line x1="102.6" y1="144.1" x2="103.9" y2="147.3" stroke="#ff7a1a" stroke-width="2.8" stroke-linecap="round"/></g><g class="arrow a3"><circle cx="78" cy="86" r="1.8" fill="#0b0d10" opacity=".55"/><line x1="78" y1="86" x2="109.0" y2="113.0" stroke="#1c222b" stroke-width="2.6" stroke-linecap="round"/><line x1="79.5" y1="87.3" x2="106.7" y2="111.0" stroke="#8793a3" stroke-width="0.6" transform="translate(0.46 -0.53)"/><path d="M99.2 104.5 Q99.7 113.0 104.3 116.2 L108.2 112.3 Z" fill="#ff7a1a"/><path d="M99.2 104.5 Q107.7 103.8 111.5 107.9 L108.2 112.3 Z" fill="#ff7a1a" opacity=".8"/><path d="M99.2 104.5 Q103.6 108.5 107.8 112.1 L108.2 112.3 Z" fill="#f2f4f7"/><line x1="108.2" y1="112.3" x2="110.9" y2="114.6" stroke="#f2f4f7" stroke-width="2.8" stroke-linecap="round"/></g></svg>
   <h1>Scorebriefje Live</h1>
-  <p>Richt de camera op het scorebriefje. De app controleert de serie-score en het lopende totaal en toont de juiste waarde waar iets fout of leeg is.</p>
+  <p>Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de serie en het lopende totaal.</p>
+  <div class="end" aria-label="Voorbeeld: regel 3, pijlen 10, 9 en 8, serie 27 klopt"><span>3</span><span>10</span><span>9</span><span>8</span><span class="tot">27</span></div>
   <div class="progress" aria-hidden="true"><i id="prog"></i></div>
   <p id="loadmsg">Herkenning laden…</p>
   <button class="btn primary" id="go" type="button" disabled>Camera starten</button>
   <button class="btn" id="gophoto" type="button" disabled>Foto kiezen</button>
-  <p style="font-size:12px">Versie 4 · 2 november 2026</p>
+  <p style="font-size:12px">Versie 5 · 2 november 2026</p>
 </div>
 
 <dialog id="dlg">
