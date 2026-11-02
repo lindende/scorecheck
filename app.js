@@ -322,7 +322,8 @@
       still.hidden = true; video.hidden = false;
     }
     $('freeze').textContent = on ? (S.source === 'camera' ? 'Doorgaan' : 'Camera') : 'Vastzetten';
-    $('detail').hidden = !on; $('save').hidden = !on || !S.geo.length;
+    $('detail').hidden = !on; $('grab').hidden = !on; $('save').hidden = !on || !S.geo.length;
+    if (on) setSheet('peek', false); // start small, so the score sheet and its overlay stay visible
     render();
     if (!on) loop();
   }
@@ -330,6 +331,54 @@
     if (S.frozen && S.source !== 'camera') { if (stream) { S.source = 'camera'; resetAll(); freezeView(false); } else startCamera(); return; }
     freezeView(!S.frozen);
   };
+
+  /* ------------------------------------------------------- pull-up panel */
+  // three resting heights for the table: hidden (peek), half and full; drag the handle or tap it to cycle
+  const sheet = { state: 'peek', drag: null, suppressClick: false };
+  function sheetHeights() {
+    const bar = $('bar'), det = $('detail');
+    const chrome = bar.offsetHeight - det.offsetHeight;
+    const full = Math.max(140, window.innerHeight * 0.9 - chrome - 64);
+    return { peek: 0, half: Math.min(full, window.innerHeight * 0.38), full };
+  }
+  function setSheet(state, animate = true) {
+    sheet.state = state;
+    const det = $('detail');
+    det.style.transition = animate ? '' : 'none';
+    det.style.height = sheetHeights()[state] + 'px';
+    if (!animate) requestAnimationFrame(() => { det.style.transition = ''; });
+    $('grab').setAttribute('aria-expanded', String(state !== 'peek'));
+    $('grabLabel').textContent = state === 'peek' ? 'Sleep omhoog voor de details' : 'Sleep omlaag om het briefje te zien';
+  }
+  const grabEl = $('grab');
+  grabEl.addEventListener('pointerdown', e => {
+    sheet.drag = { y: e.clientY, h: $('detail').offsetHeight, moved: false };
+    grabEl.setPointerCapture(e.pointerId);
+    $('detail').style.transition = 'none';
+  });
+  grabEl.addEventListener('pointermove', e => {
+    if (!sheet.drag) return;
+    const dy = sheet.drag.y - e.clientY;
+    if (Math.abs(dy) > 6) sheet.drag.moved = true;
+    const H = sheetHeights();
+    $('detail').style.height = Math.max(0, Math.min(H.full, sheet.drag.h + dy)) + 'px';
+  });
+  const endDrag = () => {
+    if (!sheet.drag) return;
+    const moved = sheet.drag.moved; sheet.drag = null;
+    $('detail').style.transition = '';
+    if (!moved) return; // a tap: handled by click
+    sheet.suppressClick = true;
+    const H = sheetHeights(), cur = $('detail').offsetHeight;
+    setSheet(['peek', 'half', 'full'].reduce((a, b) => Math.abs(H[b] - cur) < Math.abs(H[a] - cur) ? b : a));
+  };
+  grabEl.addEventListener('pointerup', endDrag);
+  grabEl.addEventListener('pointercancel', endDrag);
+  grabEl.addEventListener('click', () => {
+    if (sheet.suppressClick) { sheet.suppressClick = false; return; }
+    setSheet(sheet.state === 'peek' ? 'half' : sheet.state === 'half' ? 'full' : 'peek');
+  });
+  window.addEventListener('resize', () => { if (S.frozen) setSheet(sheet.state, false); });
 
   /* ---------------------------------------------------------------- photo */
   async function usePhoto(file) {
