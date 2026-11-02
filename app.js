@@ -22,6 +22,83 @@
   const proc = document.createElement('canvas');
   const pctx = proc.getContext('2d', { willReadFrequently: true });
 
+
+  /* ---------------------------------------------------------------- language */
+  const I18N = {
+    nl: {
+      segAria: 'Pijlen per serie', m25Title: '25 meter 1 pijl: 5 series van 5 pijlen', m25Auto: '25M1P automatisch herkend',
+      torch: 'Lamp', photo: 'Foto', training: 'Trainingsdata', freeze: 'Vastzetten', resume: 'Doorgaan', camera: 'Camera',
+      targetAria: 'Doelpak met drie pijlen in de 10, de 9 en de 8',
+      intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Werkt voor 18 m (3 of 6 pijlen) en 25 m 1 pijl; dat laatste wordt vanzelf herkend.',
+      exampleAria: 'Voorbeeld: regel 3, pijlen 10, 9 en 8, serie 27 klopt',
+      loading: 'Herkenning laden…', ready: 'Klaar. De herkenning werkt op je telefoon zelf, er gaat niets naar internet.',
+      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 17 · 2 november 2026',
+      needHttps: 'De camera werkt alleen als de app via https geopend is.',
+      noCamAccess: 'Geen toegang tot de camera. Sta camera-toegang toe voor deze site in de browserinstellingen.',
+      camFail: 'De camera kon niet starten ({e}).',
+      noTablePhoto: 'Geen scoretabel gevonden op deze foto. Fotografeer het briefje recht van boven, met de hele tabel in beeld.',
+      reading: 'Lezen…', errors1: '1 fout', errorsN: '{n} fouten', check: 'Controleer', fill: '{n} invullen', ok: 'Klopt',
+      sheet: 'Briefje', noTable: 'Geen tabel gevonden', searching: 'Zoeken naar scorebriefje…',
+      holdFlat: 'Houd het briefje plat en recht in beeld, met de hele scoretabel zichtbaar.',
+      total: 'Totaal', of: 'van', tens: "10'en", colRow18: 'Pl.', colRow25: 'Pr.', arrows: 'Pijlen', end: 'Serie',
+      tapRow: 'Tik op een regel om een verkeerd gelezen cijfer te verbeteren.',
+      panHint: 'Versleep de foto om te verschuiven, knijp om te zoomen, dubbeltik om passend te maken.',
+      grabUp: 'Sleep omhoog voor de details', grabDown: 'Sleep omlaag om het briefje te zien',
+      badPhoto: 'Deze foto kan niet geopend worden. Probeer een JPG of PNG.',
+      dlgTotal: 'totaal', dlgRow: 'regel', dlgEnd: 'serie', arrowN: 'Pijl {n}',
+      dlgHelp: 'Pas aan wat verkeerd gelezen is. Laat een vak leeg als er niets staat.', cancel: 'Annuleren', save: 'Opslaan',
+      saved: 'Opgeslagen. Stuur het bestand mee bij het verbeteren van de herkenning.',
+      langSwitch: 'Switch to English', langOther: 'English'
+    },
+    en: {
+      segAria: 'Arrows per end', m25Title: '25 metres one spot: 5 ends of 5 arrows', m25Auto: '25M1P detected automatically',
+      torch: 'Torch', photo: 'Photo', training: 'Training data', freeze: 'Freeze', resume: 'Resume', camera: 'Camera',
+      targetAria: 'Target face with three arrows in the 10, the 9 and the 8',
+      intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Works for 18 m (3 or 6 arrows per end) and 25 m one spot; the latter is recognised automatically.',
+      exampleAria: 'Example: row 3, arrows 10, 9 and 8, end total 27 is correct',
+      loading: 'Loading recognition…', ready: 'Ready. Recognition runs on your phone itself; nothing is sent to the internet.',
+      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 17 · 2 November 2026',
+      needHttps: 'The camera only works when the app is opened over https.',
+      noCamAccess: 'No access to the camera. Allow camera access for this site in your browser settings.',
+      camFail: 'The camera could not start ({e}).',
+      noTablePhoto: 'No score table found in this photo. Photograph the sheet straight from above, with the whole table in view.',
+      reading: 'Reading…', errors1: '1 error', errorsN: '{n} errors', check: 'Check', fill: '{n} to fill in', ok: 'Correct',
+      sheet: 'Sheet', noTable: 'No table found', searching: 'Looking for a score sheet…',
+      holdFlat: 'Hold the sheet flat and straight in view, with the whole score table visible.',
+      total: 'Total', of: 'of', tens: '10s', colRow18: 'Row', colRow25: '#', arrows: 'Arrows', end: 'End',
+      tapRow: 'Tap a row to correct a misread digit.',
+      panHint: 'Drag the photo to move it, pinch to zoom, double-tap to fit.',
+      grabUp: 'Drag up for details', grabDown: 'Drag down to see the sheet',
+      badPhoto: 'This photo cannot be opened. Try a JPG or PNG.',
+      dlgTotal: 'total', dlgRow: 'row', dlgEnd: 'end', arrowN: 'Arrow {n}',
+      dlgHelp: 'Correct what was misread. Leave a box empty if nothing is written.', cancel: 'Cancel', save: 'Save',
+      saved: 'Saved. Send the file along to help improve the recognition.',
+      langSwitch: 'Schakel naar Nederlands', langOther: 'Nederlands'
+    }
+  };
+  const FLAGS = {
+    nl: '<svg viewBox="0 0 9 6" aria-hidden="true"><rect width="9" height="2" fill="#AE1C28"/><rect y="2" width="9" height="2" fill="#fff"/><rect y="4" width="9" height="2" fill="#21468B"/></svg>',
+    en: '<svg viewBox="0 0 60 30" aria-hidden="true"><clipPath id="ukS"><path d="M0,0v30h60V0z"/></clipPath><clipPath id="ukT"><path d="M30,15h30v15zv15H0zH0V0zV0h30z"/></clipPath><g clip-path="url(#ukS)"><path d="M0,0v30h60V0z" fill="#012169"/><path d="M0,0L60,30M60,0L0,30" stroke="#fff" stroke-width="6"/><path d="M0,0L60,30M60,0L0,30" clip-path="url(#ukT)" stroke="#C8102E" stroke-width="4"/><path d="M30,0v30M0,15h60" stroke="#fff" stroke-width="10"/><path d="M30,0v30M0,15h60" stroke="#C8102E" stroke-width="6"/></g></svg>'
+  };
+  let LANG = 'nl';
+  try { const l = localStorage.getItem('lang'); LANG = l === 'en' || l === 'nl' ? l : ((navigator.language || 'nl').toLowerCase().startsWith('nl') ? 'nl' : 'en'); } catch (e) {}
+  const t = (key, vars) => { let str = (I18N[LANG] && I18N[LANG][key]) ?? I18N.nl[key] ?? key; if (vars) for (const k in vars) str = str.replace('{' + k + '}', vars[k]); return str; };
+  let loadState = { key: 'loading' };
+  function showLoad(key, vars, err) { loadState = { key, vars, err }; const el = $('loadmsg'); if (err) el.innerHTML = '<span class="err">' + esc(t(key, vars)) + '</span>'; else el.textContent = t(key, vars); }
+  function applyLang() {
+    document.documentElement.lang = LANG;
+    document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+    const other = LANG === 'nl' ? 'en' : 'nl';
+    $('lang').innerHTML = FLAGS[other] + '<span>' + t('langOther') + '</span>';
+    $('lang').setAttribute('aria-label', t('langSwitch')); $('lang').title = t('langSwitch');
+    showLoad(loadState.key, loadState.vars, loadState.err);
+    $('grabLabel').textContent = t(typeof sheet !== 'undefined' && sheet.state !== 'peek' ? 'grabDown' : 'grabUp');
+    $('freeze').textContent = S.frozen ? t(S.source === 'camera' ? 'resume' : 'camera') : t('freeze');
+    render();
+  }
+  $('lang').onclick = () => { LANG = LANG === 'nl' ? 'en' : 'nl'; try { localStorage.setItem('lang', LANG); } catch (e) {} applyLang(); };
+
   /* ---------------------------------------------------------------- worker */
   const worker = new Worker('worker.js');
   let fake = 0; const progTimer = setInterval(() => { fake = Math.min(92, fake + (100 - fake) * 0.06); $('prog').style.width = fake + '%'; }, 200);
@@ -29,21 +106,21 @@
     const m = ev.data;
     if (m.type === 'ready') {
       S.ready = true; clearInterval(progTimer); $('prog').style.width = '100%';
-      $('loadmsg').textContent = 'Klaar. De herkenning werkt op je telefoon zelf, er gaat niets naar internet.';
+      showLoad('ready');
       $('go').disabled = false; $('gophoto').disabled = false;
     } else if (m.type === 'error') {
-      $('loadmsg').innerHTML = '<span class="err">Herkenning kon niet laden: ' + esc(m.message) + '</span>';
+      showLoad('loadFail', { e: m.message }, true);
     } else if (m.type === 'result') onResult(m);
   };
 
   /* ---------------------------------------------------------------- camera */
   let stream = null, track = null, wakeLock = null;
   async function startCamera() {
-    if (!window.isSecureContext) { $('loadmsg').innerHTML = '<span class="err">De camera werkt alleen als de app via https geopend is.</span>'; return; }
+    if (!window.isSecureContext) { showLoad('needHttps', null, true); return; }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
     } catch (e) {
-      $('loadmsg').innerHTML = '<span class="err">' + (e.name === 'NotAllowedError' ? 'Geen toegang tot de camera. Sta camera-toegang toe voor deze site in de browserinstellingen.' : 'De camera kon niet starten (' + esc(e.name || e) + ').') + '</span>';
+      if (e.name === 'NotAllowedError') showLoad('noCamAccess', null, true); else showLoad('camFail', { e: e.name || String(e) }, true);
       return;
     }
     track = stream.getVideoTracks()[0];
@@ -136,7 +213,7 @@
       S.geo = []; S.frameW = res.width; S.frameH = res.height;
     }
     render();
-    if (instant) { freezeView(true); if (!res.sheets.length) showHint('Geen scoretabel gevonden op deze foto. Fotografeer het briefje recht van boven, met de hele tabel in beeld.'); }
+    if (instant) { freezeView(true); if (!res.sheets.length) showHint(t('noTablePhoto')); }
     else requestAnimationFrame(loop);
   }
 
@@ -271,24 +348,24 @@
     const shown = auto25 ? 25 : S.mode;
     $('m3').setAttribute('aria-pressed', shown === 3); $('m6').setAttribute('aria-pressed', shown === 6); $('m25').setAttribute('aria-pressed', shown === 25);
     $('m25').classList.toggle('auto', auto25);
-    $('m25').title = auto25 ? '25M1P automatisch herkend' : '25 meter 1 pijl: 5 series van 5 pijlen';
+    $('m25').title = auto25 ? t('m25Auto') : t('m25Title');
     drawOverlay();
     const chips = S.geo.map((g, si) => {
       const { ev, allStable, is25 } = sheetModel(si);
       const all = ev.res.flatMap(r => [r.sub, r.cum]).concat([ev.total]).filter(Boolean);
       const n = st => all.filter(x => x.st === st).length;
       let cls, txt;
-      if (!allStable && !S.frozen) { cls = 'wait'; txt = 'Lezen…'; }
-      else if (n('bad')) { cls = 'bad'; txt = n('bad') + (n('bad') === 1 ? ' fout' : ' fouten'); }
-      else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = 'Controleer'; }
-      else if (n('miss')) { cls = 'miss'; txt = n('miss') + ' invullen'; }
-      else { cls = 'ok'; txt = 'Klopt'; }
-      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
+      if (!allStable && !S.frozen) { cls = 'wait'; txt = t('reading'); }
+      else if (n('bad')) { cls = 'bad'; txt = n('bad') === 1 ? t('errors1') : t('errorsN', { n: n('bad') }); }
+      else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = t('check'); }
+      else if (n('miss')) { cls = 'miss'; txt = t('fill', { n: n('miss') }); }
+      else { cls = 'ok'; txt = t('ok'); }
+      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
     });
-    $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? 'Geen tabel gevonden' : 'Zoeken naar scorebriefje…'}</div></div>`;
+    $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? t('noTable') : t('searching')}</div></div>`;
     if (S.frozen) renderDetail();
     const lost = S.source === 'camera' && !S.frozen && performance.now() - S.lastSeen > 1500;
-    if (lost) showHint('Houd het briefje plat en recht in beeld, met de hele scoretabel zichtbaar.'); else if (S.source === 'camera') hideHint();
+    if (lost) showHint(t('holdFlat')); else if (S.source === 'camera') hideHint();
   }
 
   function cellHtml(c) {
@@ -309,12 +386,12 @@
         const ar = r.arrows.map(a => `<span class="a${a === '?' ? ' q' : ''}">${a === null ? '·' : esc(a)}</span>`).join('');
         return `<tr data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td>${ar}</td><td>${cellHtml(rr.sub)}</td>${is25 ? '' : `<td>${cellHtml(rr.cum)}</td>`}</tr>`;
       }).join('');
-      const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>Totaal</td>${is25 ? '' : '<td></td>'}<td>${cellHtml(ev.total)}</td></tr>` : '';
-      return `<div class="card" id="card${si}"><h2><span>Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} van ${ev.arrows * 10}</span></h2>
-        <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>10'en <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
-        <table><thead><tr><th>${is25 ? 'Pr.' : 'Pl.'}</th><th>Pijlen</th><th>Serie</th>${is25 ? '' : '<th>Totaal</th>'}</tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
+      const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>${t('total')}</td>${is25 ? '' : '<td></td>'}<td>${cellHtml(ev.total)}</td></tr>` : '';
+      return `<div class="card" id="card${si}"><h2><span>${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} ${t('of')} ${ev.arrows * 10}</span></h2>
+        <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>${t('tens')} <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
+        <table><thead><tr><th>${t(is25 ? 'colRow25' : 'colRow18')}</th><th>${t('arrows')}</th><th>${t('end')}</th>${is25 ? '' : `<th>${t('total')}</th>`}</tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
     }).join('');
-    $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">Tik op een regel om een verkeerd gelezen cijfer te verbeteren.</p>';
+    $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">' + esc(t('tapRow')) + '</p>';
   }
 
   // tapping a summary opens the panel at that sheet's table
@@ -338,7 +415,7 @@
     } else {
       still.hidden = true; video.hidden = false; S.view = null;
     }
-    $('freeze').textContent = on ? (S.source === 'camera' ? 'Doorgaan' : 'Camera') : 'Vastzetten';
+    $('freeze').textContent = on ? t(S.source === 'camera' ? 'resume' : 'camera') : t('freeze');
     $('detail').hidden = !on; $('grab').hidden = !on; $('save').hidden = !on || !S.geo.length;
     if (on) setSheet('peek', false); // start small, so the score sheet and its overlay stay visible
     if (on) requestAnimationFrame(() => { fitView(); redrawFrozen(); maybeHintPan(); });
@@ -384,7 +461,7 @@
   function redrawFrozen() { drawStill(); drawOverlay(); }
   function maybeHintPan() {
     try { if (localStorage.getItem('panHint')) return; localStorage.setItem('panHint', '1'); } catch (e) {}
-    toast('Versleep de foto om te verschuiven, knijp om te zoomen, dubbeltik om passend te maken.');
+    toast(t('panHint'));
   }
   const ptrs = new Map(); let panMoved = false, lastTap = 0;
   overlay.addEventListener('pointerdown', e => {
@@ -440,7 +517,7 @@
     if (!animate) requestAnimationFrame(() => { det.style.transition = ''; });
     $('grab').setAttribute('aria-expanded', String(state !== 'peek'));
     if (S.frozen && !S.userView) setTimeout(() => { fitView(); redrawFrozen(); }, animate ? 240 : 0);
-    $('grabLabel').textContent = state === 'peek' ? 'Sleep omhoog voor de details' : 'Sleep omlaag om het briefje te zien';
+    $('grabLabel').textContent = t(state === 'peek' ? 'grabUp' : 'grabDown');
   }
   const grabEl = $('grab');
   grabEl.addEventListener('pointerdown', e => {
@@ -477,7 +554,7 @@
     if (!file || !S.ready) return;
     let bmp;
     try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
-    catch (e) { showHint('Deze foto kan niet geopend worden. Probeer een JPG of PNG.'); return; }
+    catch (e) { showHint(t('badPhoto')); return; }
     const s = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
     proc.width = Math.round(bmp.width * s); proc.height = Math.round(bmp.height * s);
     pctx.drawImage(bmp, 0, 0, proc.width, proc.height);
@@ -523,16 +600,16 @@
     editing = { si, ri };
     const show = v => v === null || v === undefined ? '' : v;
     if (ri === 't') {
-      $('dlgTitle').textContent = `Briefje ${si + 1} · totaal`;
+      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t('dlgTotal')}`;
       $('dlgArrows').innerHTML = ''; $('dlgArrows').hidden = true; $('dlgSub').parentElement.hidden = true; $('dlgCum').parentElement.hidden = false;
       $('dlgCum').value = show(get(`${si}:t`));
     } else {
-      $('dlgTitle').textContent = `Briefje ${si + 1} · regel ${(+ri + 1) * 3}`;
+      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t('dlgRow')} ${(+ri + 1) * 3}`;
       $('dlgArrows').hidden = false; $('dlgSub').parentElement.hidden = false;
       const g = S.geo[si], na = g.spans.arrows.length;
-      $('dlgTitle').textContent = `Briefje ${si + 1} · ${g.layout === '25m1p' ? 'serie' : 'regel'} ${(+ri + 1) * g.step}`;
+      $('dlgTitle').textContent = `${t('sheet')} ${si + 1} · ${t(g.layout === '25m1p' ? 'dlgEnd' : 'dlgRow')} ${(+ri + 1) * g.step}`;
       $('dlgArrows').style.gridTemplateColumns = `repeat(${na}, 1fr)`;
-      $('dlgArrows').innerHTML = Array.from({ length: na }, (_, k) => `<label>Pijl ${k + 1}<input id="dlgA${k}" maxlength="2" value="${esc(show(get(`${si}:${ri}:a${k}`)))}"></label>`).join('');
+      $('dlgArrows').innerHTML = Array.from({ length: na }, (_, k) =>  `<label>${t('arrowN', { n: k + 1 })}<input id="dlgA${k}" maxlength="2" value="${esc(show(get(`${si}:${ri}:a${k}`)))}"></label>`).join('');
       $('dlgSub').value = show(get(`${si}:${ri}:sub`)); $('dlgCum').value = show(get(`${si}:${ri}:cum`));
       $('dlgCum').parentElement.hidden = !g.spans.cum;
     }
@@ -576,7 +653,7 @@
     a.download = 'scorebriefje-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast('Opgeslagen. Stuur het bestand mee bij het verbeteren van de herkenning.');
+    toast(t('saved'));
   }
 
   /* ---------------------------------------------------------------- misc */
@@ -586,5 +663,5 @@
   function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-  render();
+  applyLang();
 })();
