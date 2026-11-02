@@ -154,26 +154,35 @@
     const ys = peaks(rowSums(hl, x0, x1), (x1 - x0) * 0.5, H * 0.008);
     if (ys.length < 4) return null;
     const dx = [Math.round(fit[2]), Math.round(fit[3])], vd = vl.data;
-    const hasDividers = (a, b) => {
+    const colCover = (x, a, b) => {
       const ya = Math.round(a + (b - a) * 0.2), yb = Math.round(b - (b - a) * 0.2);
-      if (yb <= ya) return false;
-      let worst = 1;
-      for (const x of dx) {
-        let c = 0;
-        for (let y = ya; y < yb; y++) {
-          let any = 0; for (let xx = Math.max(0, x - 2); xx <= Math.min(W - 1, x + 2); xx++) if (vd[y * W + xx]) { any = 1; break; }
-          c += any;
-        }
-        worst = Math.min(worst, c / (yb - ya));
+      if (yb <= ya) return 0;
+      let c = 0;
+      for (let y = ya; y < yb; y++) {
+        let any = 0; for (let xx = Math.max(0, x - 2); xx <= Math.min(W - 1, x + 2); xx++) if (vd[y * W + xx]) { any = 1; break; }
+        c += any;
       }
-      return worst > 0.6;
+      return c / (yb - ya);
     };
+    const coverage = (a, b) => Math.min(...dx.map(x => colCover(x, a, b)));
+    // all four lines around the arrow boxes; a header or Totaal row has none of them
+    const allDx = [1, 2, 3, 4].map(i => Math.round(fit[i]));
+    const partial = (a, b) => allDx.filter(x => colCover(x, a, b) > 0.5).length >= 2;
+    const hasDividers = (a, b) => coverage(a, b) > 0.6;
     let run = null, bestRun = null;
     for (let k = 0; k < ys.length - 1; k++) {
       if (hasDividers(ys[k], ys[k + 1])) run = run ? [run[0], k] : [k, k]; else run = null;
       if (run && (!bestRun || run[1] - run[0] > bestRun[1] - bestRun[0])) bestRun = run;
     }
     if (!bestRun || bestRun[1] - bestRun[0] < 2) return null;
+    {
+      // handwriting over a divider can hide it; extend the run over rows of the same height with partial dividers
+      const hs = []; for (let k = bestRun[0]; k <= bestRun[1]; k++) hs.push(ys[k + 1] - ys[k]); hs.sort((p, q) => p - q);
+      const rh0 = hs[hs.length >> 1];
+      const sameHeight = k => { const hgt = ys[k + 1] - ys[k]; return hgt > 0.8 * rh0 && hgt < 1.25 * rh0; };
+      while (bestRun[0] > 0 && sameHeight(bestRun[0] - 1) && partial(ys[bestRun[0] - 1], ys[bestRun[0]])) bestRun[0]--;
+      while (bestRun[1] + 1 < ys.length - 1 && sameHeight(bestRun[1] + 1) && partial(ys[bestRun[1] + 1], ys[bestRun[1] + 2])) bestRun[1]++;
+    }
     const [a, b] = bestRun;
     const rows = ys.slice(a, b + 2);
     const gaps = rows.slice(1).map((y, i) => y - rows[i]).sort((p, q) => p - q);
@@ -349,16 +358,77 @@
       const w = S[i * 5 + 2], h = S[i * 5 + 3], area = S[i * 5 + 4];
       if (area >= 4 && !(area >= 12 && !(h < ROWH * 0.18 && w < ROWH * 0.18))) small.push({ id: i, x: S[i * 5], y: S[i * 5 + 1], w, h, area });
     }
-    attachTails(comps, small);
     const lab = Int32Array.from(labels.data32S), cols = labels.cols;
     [labels, stats, cents].forEach(m => m.delete());
+    for (const c of comps) c.parts = [{ id: c.id }];
+    traceTails(lab, cols, comps, n);
+    attachTails(comps, small.filter(sm => hasLabel(lab, cols, sm)));
     return { comps, lab, cols };
+  }
+
+  function hasLabel(lab, cols, c) {
+    for (let y = c.y; y < c.y + c.h; y++) for (let x = c.x; x < c.x + c.w; x++) if (lab[y * cols + x] === c.id) return true;
+    return false;
+  }
+
+  /* A long tail (a 9, a 7) runs over the row line into the cell below and often touches the digit
+     written there. Follow the thin stroke downward from where it left the glyph above, hand those
+     pixels to that glyph, and stop where the stroke meets something wider. */
+  function traceTails(lab, cols, comps, firstFree) {
+    const H = lab.length / cols, MAXW = 7;
+    const areaOf = new Map(comps.map(c => [c.id, c.area]));
+    let nextId = firstFree + 1;
+    const dirty = new Set();
+    for (const a of comps) {
+      const bottom = a.y + a.h - 1;
+      const k = Math.round((bottom + 1 - PAD) / ROWH), ly = PAD + k * ROWH;
+      if (k < 1 || Math.abs(bottom + 1 - ly) > 5) continue;
+      // where does the glyph leave through its bottom edge?
+      const mark = [];
+      for (let x = a.x; x < a.x + a.w; x++) if (lab[bottom * cols + x] === a.id || (bottom > 0 && lab[(bottom - 1) * cols + x] === a.id)) mark.push(x);
+      const runs = [];
+      for (const x of mark) { const r = runs[runs.length - 1]; if (r && x - r[1] <= 1) r[1] = x; else runs.push([x, x]); }
+      for (const [x0, x1] of runs) {
+        if (x1 - x0 > MAXW) continue;
+        let cx0 = Math.max(0, x0 - 2), cx1 = Math.min(cols - 1, x1 + 2), y = bottom + 1, found = 0;
+        for (; y <= bottom + 9 && y < H && !found; y++) for (let x = cx0; x <= cx1; x++) { const L = lab[y * cols + x]; if (L > 0 && L !== a.id) { found = L; break; } }
+        if (!found) continue;
+        y--;
+        const tailId = nextId++, touched = [];
+        let len = 0;
+        for (; y < H && len < ROWH * 1.2; y++) {
+          let s = -1;
+          for (let x = Math.max(0, cx0 - 1); x <= Math.min(cols - 1, cx1 + 1); x++) if (lab[y * cols + x] === found) { s = x; break; }
+          if (s < 0) break;
+          let rs = s, re = s;
+          while (rs > 0 && lab[y * cols + rs - 1] === found) rs--;
+          while (re < cols - 1 && lab[y * cols + re + 1] === found) re++;
+          if (re - rs + 1 > MAXW) break; // the tail meets the next digit
+          for (let x = rs; x <= re; x++) { lab[y * cols + x] = tailId; touched.push(y * cols + x); }
+          cx0 = rs - 2; cx1 = re + 2; len++;
+        }
+        // never swallow most of a real digit (a thin 7 below can look like a tail)
+        const eatsDigit = areaOf.has(found) && touched.length > 0.45 * areaOf.get(found) && areaOf.get(found) > ROWH * 2.5;
+        if (len >= 3 && !eatsDigit) { a.parts.push({ id: tailId }); a.h = Math.max(a.h, y - a.y); dirty.add(found); }
+        else for (const i of touched) lab[i] = found;
+      }
+    }
+    // the glyphs that lost pixels get new bounds
+    for (let i = comps.length - 1; i >= 0; i--) {
+      const c = comps[i];
+      if (!dirty.has(c.id)) continue;
+      let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, area = 0, sx = 0, sy = 0;
+      for (let y = c.y; y < Math.min(H, c.y + c.h); y++) for (let x = c.x; x < c.x + c.w; x++) if (lab[y * cols + x] === c.id) {
+        area++; sx += x; sy += y; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      if (area < 12) { if (c.parts.length === 1) comps.splice(i, 1); else { c.parts = c.parts.filter(p => p.id !== c.id); } continue; }
+      Object.assign(c, { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, area, cx: sx / area, cy: sy / area });
+    }
   }
 
   /* A pen stroke that crosses a row line is cut in two. A fragment that starts right under the cut and
      is too small to be a digit of its own is glued back onto the fragment right above it. */
   function attachTails(comps, small) {
-    for (const c of comps) c.parts = [{ id: c.id }];
     const all = comps.concat(small.map(s => Object.assign(s, { tiny: true })));
     const nearLine = y => { const k = Math.round((y - PAD) / ROWH); return Math.abs(y - (PAD + k * ROWH)) <= 7; };
     for (const b of all) {
@@ -476,32 +546,53 @@
     return { s: k === 12 ? '10' : String(k), conf: pv / tot, k };
   }
 
-  // Read one blob as one or more digits; touching digits are split at the thinnest column.
-  function readBlob(predict, gm, depth) {
-    const p = classify(predict, gm); if (!p) return { s: '', conf: 1 };
+  /* Ways to read one blob: as 1 digit, or split at the thinnest column into 2 (or 3) digits.
+     Each option carries a confidence that includes a width prior: wide blobs are probably several digits. */
+  function blobOptions(predict, gm) {
+    const p = classify(predict, gm); if (!p) return [];
+    const ar = gm.w / gm.h, pSplit = 1 / (1 + Math.exp(-(ar - 1.0) * 6));
     const whole = digitsOf(p);
-    const ar = gm.w / gm.h;
-    if (depth >= 3) return whole;
-    const mustSplit = ar > 1.05;
-    const maySplit = ar > 0.75 && whole.conf < 0.6;
-    if (!mustSplit && !maySplit) return whole;
-    const parts = splitGlyph(gm);
-    if (!parts) return whole;
-    const a = readBlob(predict, parts[0], depth + 1), b = readBlob(predict, parts[1], depth + 1);
-    const split = { s: a.s + b.s, conf: a.conf * b.conf };
-    if (mustSplit || split.conf > whole.conf) return split;
-    return whole;
+    const opts = [{ s: whole.s, conf: whole.conf * (1 - pSplit), n: 1 }];
+    if (ar > 0.6) {
+      const parts = splitGlyph(gm);
+      if (parts) {
+        const a = classify(predict, parts[0]), b = classify(predict, parts[1]);
+        if (a && b) {
+          const da = digitsOf(a), db = digitsOf(b);
+          opts.push({ s: da.s + db.s, conf: da.conf * db.conf * pSplit, n: 2 });
+          if (ar > 1.5) { // three touching digits: split the wider half once more
+            const wi = parts[0].w >= parts[1].w ? 0 : 1, sub = splitGlyph(parts[wi]);
+            if (sub) {
+              const x = sub.map(q => classify(predict, q)); const o = digitsOf(wi ? a : b);
+              if (x[0] && x[1]) { const d0 = digitsOf(x[0]), d1 = digitsOf(x[1]);
+                opts.push({ s: wi === 0 ? d0.s + d1.s + db.s : da.s + d0.s + d1.s, conf: d0.conf * d1.conf * o.conf * pSplit, n: 3 }); }
+            }
+          }
+        }
+      }
+    }
+    return opts;
   }
 
-  function readNumber(predict, glyphs) {
+  /** Read a written number from its blobs, with at most maxDigits digits in total. */
+  function readNumber(predict, glyphs, maxDigits = 3) {
     if (!glyphs.length) return { v: null, conf: 1 };
-    let s = '', conf = 1;
-    for (const g of glyphs) { const r = readBlob(predict, g.mask, 0); s += r.s; conf *= r.conf; }
-    if (!s) return { v: null, conf: 1 };
-    return { v: s.length > 4 ? '?' : s, conf };
+    const all = glyphs.map(g => blobOptions(predict, g.mask)).filter(o => o.length);
+    if (!all.length) return { v: null, conf: 1 };
+    if (all.length > maxDigits) return { v: '?', conf: 0 };
+    // best combination under the digit budget (few blobs, so brute force)
+    let best = null;
+    const walk = (i, s, conf, n) => {
+      if (n > maxDigits) return;
+      if (i === all.length) { if (!best || conf > best.conf) best = { s, conf }; return; }
+      for (const o of all[i]) walk(i + 1, s + o.s, conf * o.conf, n + o.n);
+    };
+    walk(0, '', 1, 0);
+    if (!best) return { v: '?', conf: 0 };
+    // report the confidence of the digits themselves, without the width prior
+    return { v: best.s, conf: Math.pow(best.conf, 0.7) };
   }
 
-  /** Read every cell of one sheet. Returns rows [{arrows:[{v,conf}], sub, cum}], total. */
   /** Cut a canonical sheet image (CV_8UC1, grid at PAD, W wide, n rows of ROWH) into glyphs per cell.
       Returns glyphsOf(row, field) -> [{x, mask:{m,w,h}}] sorted left to right. */
   function cellGlyphs(cv, can, W, n) {
@@ -533,12 +624,12 @@
     for (let r = 0; r < sh.nrows; r++) {
       rows.push({
         arrows: ['a0', 'a1', 'a2'].map(f => readArrow(predict, glyphsOf(r, f))),
-        sub: readNumber(predict, glyphsOf(r, 'sub')),
-        cum: readNumber(predict, glyphsOf(r, 'cum'))
+        sub: readNumber(predict, glyphsOf(r, 'sub'), 2),
+        cum: readNumber(predict, glyphsOf(r, 'cum'), 3)
       });
     }
     let total = null;
-    if (sh.hasTotal) total = readNumber(predict, glyphsOf(sh.nrows, 'cum'));
+    if (sh.hasTotal) total = readNumber(predict, glyphsOf(sh.nrows, 'cum'), 3);
     const out = { rows, total, T, Tinv: inv3(T), W, H };
     if (opts && opts.canon) { out.canon = Uint8Array.from(can.data); out.cw = can.cols; out.ch = can.rows; }
     can.delete();
@@ -567,5 +658,5 @@
     can.delete(); r.ink.delete(); return out;
   }
 
-  root.ScoreVision = { _debugInk, cellGlyphs, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
+  root.ScoreVision = { _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
 })(typeof self !== 'undefined' ? self : globalThis);
