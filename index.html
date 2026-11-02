@@ -50,6 +50,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-of
 .grab:active{cursor:grabbing}
 .chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;flex:none}
 .chip{flex:none;display:flex;align-items:center;gap:10px;background:var(--panel-solid);border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.chip[data-si]{cursor:pointer}
 .chip .n{font:700 22px var(--mono);font-variant-numeric:tabular-nums}
 .chip .l{font-size:12px;color:var(--muted)}
 .chip .s{font-size:13px;font-weight:600}
@@ -62,6 +63,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-of
 input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 
 .detail{overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0;flex:none;height:0;transition:height .22s ease;overscroll-behavior:contain}
+.detail > *{flex-shrink:0} /* cards keep their full height; the panel scrolls instead */
 @media (prefers-reduced-motion:reduce){.detail{transition:none}}
 .card{background:var(--panel-solid);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .card h2{font-size:15px;margin:0;padding:10px 12px;display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line)}
@@ -169,7 +171,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <p id="loadmsg">Herkenning laden…</p>
   <button class="btn primary" id="go" type="button" disabled>Camera starten</button>
   <button class="btn" id="gophoto" type="button" disabled>Foto kiezen</button>
-  <p style="font-size:12px">Versie 15 · 2 november 2026</p>
+  <p style="font-size:12px">Versie 16 · 2 november 2026</p>
 </div>
 
 <dialog id="dlg">

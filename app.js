@@ -283,7 +283,7 @@
       else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = 'Controleer'; }
       else if (n('miss')) { cls = 'miss'; txt = n('miss') + ' invullen'; }
       else { cls = 'ok'; txt = 'Klopt'; }
-      return `<div class="chip"><div><div class="l">Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
+      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
     });
     $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? 'Geen tabel gevonden' : 'Zoeken naar scorebriefje…'}</div></div>`;
     if (S.frozen) renderDetail();
@@ -310,12 +310,22 @@
         return `<tr data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td>${ar}</td><td>${cellHtml(rr.sub)}</td>${is25 ? '' : `<td>${cellHtml(rr.cum)}</td>`}</tr>`;
       }).join('');
       const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>Totaal</td>${is25 ? '' : '<td></td>'}<td>${cellHtml(ev.total)}</td></tr>` : '';
-      return `<div class="card"><h2><span>Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} van ${ev.arrows * 10}</span></h2>
+      return `<div class="card" id="card${si}"><h2><span>Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} van ${ev.arrows * 10}</span></h2>
         <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>10'en <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
         <table><thead><tr><th>${is25 ? 'Pr.' : 'Pl.'}</th><th>Pijlen</th><th>Serie</th>${is25 ? '' : '<th>Totaal</th>'}</tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
     }).join('');
     $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">Tik op een regel om een verkeerd gelezen cijfer te verbeteren.</p>';
   }
+
+  // tapping a summary opens the panel at that sheet's table
+  function showCard(si) {
+    if (!S.frozen) return;
+    if (sheet.state === 'peek') setSheet('half');
+    const det = $('detail'), card = $('card' + si);
+    if (card) setTimeout(() => det.scrollTo({ top: card.offsetTop - det.offsetTop, behavior: 'smooth' }), 60);
+  }
+  $('chips').addEventListener('click', e => { const c = e.target.closest('.chip[data-si]'); if (c) showCard(+c.dataset.si); });
+  $('chips').addEventListener('keydown', e => { if (e.key !== 'Enter' && e.key !== ' ') return; const c = e.target.closest('.chip[data-si]'); if (c) { e.preventDefault(); showCard(+c.dataset.si); } });
 
   /* ---------------------------------------------------------------- freeze */
   function freezeView(on) {
