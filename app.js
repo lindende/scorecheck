@@ -1,4 +1,4 @@
-/* Scorebriefje Live — camera, voting over frames, scoring and overlay. */
+/* ScoreChecker Live — camera, voting over frames, scoring and overlay. */
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);

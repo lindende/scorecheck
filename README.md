@@ -1,4 +1,4 @@
-# scorecheck – Scorebriefje Live
+# scorecheck – ScoreChecker Live
 
 Webapp die handboog-scorebriefjes live via de camera controleert: de serie-score en het lopende totaal krijgen een overlay met *klopt*, *fout* (met de juiste waarde) of *nog invullen*.
 

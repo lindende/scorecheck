@@ -1,6 +1,6 @@
 {
-  "name": "Scorebriefje Live",
-  "short_name": "Scorebriefje",
+  "name": "ScoreChecker Live",
+  "short_name": "ScoreChecker",
   "description": "Controleert handboog-scorebriefjes live met de camera.",
   "lang": "nl",
   "start_url": "./",
