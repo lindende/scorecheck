@@ -1,5 +1,5 @@
 /* Offline cache: after the first visit the app also works without internet (sporthal). */
-const CACHE = 'scorebriefje-v1';
+const CACHE = 'scorebriefje-v2';
 const FILES = ['./', 'index.html', 'app.js', 'scoring.js', 'worker.js', 'vision.js', 'weights.json', 'opencv.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });

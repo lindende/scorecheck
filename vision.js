@@ -125,9 +125,9 @@
     const w = gray.cols, h = gray.rows;
     const bw = new cv.Mat(), hl = new cv.Mat(), vl = new cv.Mat();
     cv.adaptiveThreshold(gray, bw, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, odd(Math.max(15, Math.min(w, h) / 25)), 12);
-    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(Math.max(10, Math.floor(w / 25)), 1));
+    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(Math.max(10, Math.floor(w / 35)), 1));
     cv.morphologyEx(bw, hl, cv.MORPH_OPEN, k); k.delete();
-    k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, Math.max(10, Math.floor(h / 35))));
+    k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, Math.max(10, Math.floor(h / 50))));
     cv.morphologyEx(bw, vl, cv.MORPH_OPEN, k); k.delete();
     return { bw, hl, vl };
   }
@@ -178,6 +178,8 @@
     const rows = ys.slice(a, b + 2);
     const gaps = rows.slice(1).map((y, i) => y - rows[i]).sort((p, q) => p - q);
     const rh = gaps[gaps.length >> 1];
+    // a score grid is about 8-9 row heights wide; anything else (e.g. two cards seen as one) is rejected
+    if ((R - L) / rh < 5 || (R - L) / rh > 14) return null;
     let total = null;
     if (b + 2 < ys.length) { const g = ys[b + 2] - ys[b + 1]; if (g > 0.6 * rh && g < 1.5 * rh) total = ys[b + 2]; }
     return { L, R, rows, total, rh };
@@ -195,18 +197,40 @@
 
   /** Find score grids. gray: full-res CV_8UC1. Returns [{quad:[tl,tr,br,bl], nrows, hasTotal}] sorted left to right. */
   function detect(cv, gray) {
-    const scale = 640 / Math.max(gray.cols, gray.rows);
+    // Small score sheets in a big photo need more pixels; try a fast size first, then a larger one.
+    const maxSide = Math.max(gray.cols, gray.rows);
+    let best = [], bestRows = -1;
+    for (const target of [900, 1500]) {
+      const scale = Math.min(1, target / maxSide);
+      const found = detectAt(cv, gray, scale);
+      const rows = found.reduce((t, f) => t + f.nrows, 0);
+      if (rows > bestRows) { best = found; bestRows = rows; }
+      if ((found.length && found.every(f => f.nrows >= 8)) || scale === 1) break;
+    }
+    return best;
+  }
+
+  function detectAt(cv, gray, scale) {
     const small = new cv.Mat();
-    cv.resize(gray, small, new cv.Size(Math.round(gray.cols * scale), Math.round(gray.rows * scale)), 0, 0, cv.INTER_AREA);
+    if (scale < 0.75) {
+      // keep thin printed lines: darkest pixel wins before shrinking
+      const k = Math.max(2, Math.round(1 / scale));
+      const er = new cv.Mat(), kern = cv.Mat.ones(k, k, cv.CV_8U);
+      cv.erode(gray, er, kern);
+      cv.resize(er, small, new cv.Size(Math.round(gray.cols * scale), Math.round(gray.rows * scale)), 0, 0, cv.INTER_AREA);
+      er.delete(); kern.delete();
+    } else {
+      cv.resize(gray, small, new cv.Size(Math.round(gray.cols * scale), Math.round(gray.rows * scale)), 0, 0, cv.INTER_AREA);
+    }
     const { bw, hl, vl } = lineMasks(cv, small);
     const lines = new cv.Mat(); cv.bitwise_or(hl, vl, lines);
     const contours = new cv.MatVector(), hier = new cv.Mat();
     cv.findContours(lines, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     const A = small.rows * small.cols, cand = [];
-    for (let i = 0; i < contours.size(); i++) { const c = contours.get(i); const a = cv.contourArea(c); if (a >= 0.06 * A) cand.push({ i, a }); c.delete(); }
+    for (let i = 0; i < contours.size(); i++) { const c = contours.get(i); const a = cv.contourArea(c); if (a >= 0.012 * A) cand.push({ i, a }); c.delete(); }
     cand.sort((p, q) => q.a - p.a);
     const out = [];
-    for (const { i } of cand.slice(0, 4)) {
+    for (const { i } of cand.slice(0, 6)) {
       const c = contours.get(i);
       const rect = cv.minAreaRect(c); c.delete();
       const pts = orderQuad(cv.RotatedRect.points(rect));
@@ -220,6 +244,10 @@
       const whl = new cv.Mat(), wvl = new cv.Mat();
       cv.warpPerspective(hl, whl, M, new cv.Size(w, h), cv.INTER_NEAREST);
       cv.warpPerspective(vl, wvl, M, new cv.Size(w, h), cv.INTER_NEAREST);
+      // thicken a little, so slightly tilted thin lines still add up in the projections
+      const t = Math.max(3, Math.round(Math.max(w, h) * 0.005)) | 1;
+      let kk = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, t)); cv.dilate(whl, whl, kk); kk.delete();
+      kk = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(t, 1)); cv.dilate(wvl, wvl, kk); kk.delete();
       const res = analyseWarp(whl, wvl);
       const m = Array.from(M.data64F);
       [src, dst, M, whl, wvl].forEach(x => x.delete());
@@ -231,8 +259,16 @@
       out.push({ quad, nrows: res.rows.length - 1, hasTotal: res.total !== null });
     }
     [small, bw, hl, vl, lines, hier].forEach(x => x.delete()); contours.delete();
-    out.sort((p, q) => (p.quad[0].x + p.quad[3].x) - (q.quad[0].x + q.quad[3].x));
-    return out;
+    // the same grid can be found via two contours: keep the one with the most rows
+    const cen = q => ({ x: (q[0].x + q[2].x) / 2, y: (q[0].y + q[2].y) / 2, w: Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y) });
+    out.sort((p, q) => q.nrows - p.nrows);
+    const kept = [];
+    for (const o of out) {
+      const c = cen(o.quad);
+      if (!kept.some(k => { const d = cen(k.quad); return Math.abs(c.x - d.x) < 0.5 * d.w; })) kept.push(o);
+    }
+    kept.sort((p, q) => (p.quad[0].x + p.quad[3].x) - (q.quad[0].x + q.quad[3].x));
+    return kept;
   }
 
   /* ----------------------------------------------------------- reading */

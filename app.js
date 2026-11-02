@@ -311,7 +311,7 @@
     let bmp;
     try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
     catch (e) { showHint('Deze foto kan niet geopend worden. Probeer een JPG of PNG.'); return; }
-    const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const s = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
     proc.width = Math.round(bmp.width * s); proc.height = Math.round(bmp.height * s);
     pctx.drawImage(bmp, 0, 0, proc.width, proc.height);
     S.source = 'photo'; S.frozen = true;
