@@ -201,6 +201,7 @@
 
   /* ---------------------------------------------------------------- overlay */
   function frameToScreen() {
+    if (S.frozen && S.view) return S.view;
     const cw = overlay.clientWidth, ch = overlay.clientHeight;
     const s = Math.max(cw / S.frameW, ch / S.frameH);
     return { s, ox: (cw - S.frameW * s) / 2, oy: (ch - S.frameH * s) / 2 };
@@ -265,7 +266,12 @@
 
   /* ---------------------------------------------------------------- panel */
   function render() {
-    $('m3').setAttribute('aria-pressed', S.mode === 3); $('m6').setAttribute('aria-pressed', S.mode === 6); $('m25').setAttribute('aria-pressed', S.mode === 25);
+    // a 25m1p sheet is recognised by itself; show that in the switch without changing the chosen mode
+    const auto25 = S.mode !== 25 && S.geo.length > 0 && S.geo.every(g => g.layout === '25m1p');
+    const shown = auto25 ? 25 : S.mode;
+    $('m3').setAttribute('aria-pressed', shown === 3); $('m6').setAttribute('aria-pressed', shown === 6); $('m25').setAttribute('aria-pressed', shown === 25);
+    $('m25').classList.toggle('auto', auto25);
+    $('m25').title = auto25 ? '25M1P automatisch herkend' : '25 meter 1 pijl: 5 series van 5 pijlen';
     drawOverlay();
     const chips = S.geo.map((g, si) => {
       const { ev, allStable, is25 } = sheetModel(si);
@@ -315,15 +321,17 @@
   function freezeView(on) {
     S.frozen = on;
     if (on) {
-      still.width = proc.width; still.height = proc.height;
-      still.getContext('2d').drawImage(proc, 0, 0);
+      frozen.width = proc.width; frozen.height = proc.height;
+      frozen.getContext('2d').drawImage(proc, 0, 0);
       still.hidden = false; video.hidden = true;
+      S.view = null; S.userView = false;
     } else {
-      still.hidden = true; video.hidden = false;
+      still.hidden = true; video.hidden = false; S.view = null;
     }
     $('freeze').textContent = on ? (S.source === 'camera' ? 'Doorgaan' : 'Camera') : 'Vastzetten';
     $('detail').hidden = !on; $('grab').hidden = !on; $('save').hidden = !on || !S.geo.length;
     if (on) setSheet('peek', false); // start small, so the score sheet and its overlay stay visible
+    if (on) requestAnimationFrame(() => { fitView(); redrawFrozen(); maybeHintPan(); });
     render();
     if (!on) loop();
   }
@@ -331,6 +339,79 @@
     if (S.frozen && S.source !== 'camera') { if (stream) { S.source = 'camera'; resetAll(); freezeView(false); } else startCamera(); return; }
     freezeView(!S.frozen);
   };
+
+  /* ------------------------------------------------- frozen view: fit, pan, zoom */
+  const frozen = document.createElement('canvas');
+  // the part of the screen that is not covered by the top bar and the panel
+  function visibleArea() {
+    const top = document.querySelector('.top').getBoundingClientRect().bottom + 4;
+    const bottom = $('bar').getBoundingClientRect().top - 8;
+    return { x: 8, y: top, w: overlay.clientWidth - 16, h: Math.max(80, bottom - top) };
+  }
+  function fitView() {
+    if (!S.frozen || !frozen.width) return;
+    const fw = frozen.width, fh = frozen.height, A = visibleArea();
+    let x0 = 0, y0 = 0, x1 = fw, y1 = fh;
+    if (S.geo.length) {
+      const pts = S.geo.flatMap(g => g.quad);
+      x0 = Math.min(...pts.map(p => p.x)); x1 = Math.max(...pts.map(p => p.x));
+      y0 = Math.min(...pts.map(p => p.y)); y1 = Math.max(...pts.map(p => p.y));
+      const mx = (x1 - x0) * 0.06, my = (y1 - y0) * 0.06; // room for handwriting past the border
+      x0 = Math.max(0, x0 - mx); x1 = Math.min(fw, x1 + mx * 2); y0 = Math.max(0, y0 - my); y1 = Math.min(fh, y1 + my * 2);
+    }
+    const sc = Math.min(A.w / (x1 - x0), A.h / (y1 - y0));
+    S.view = { s: sc, ox: A.x + (A.w - (x1 - x0) * sc) / 2 - x0 * sc, oy: A.y + (A.h - (y1 - y0) * sc) / 2 - y0 * sc };
+  }
+  function drawStill() {
+    if (!S.frozen || !S.view) return;
+    const dpr = window.devicePixelRatio || 1, cw = still.clientWidth, ch = still.clientHeight;
+    if (still.width !== Math.round(cw * dpr) || still.height !== Math.round(ch * dpr)) { still.width = Math.round(cw * dpr); still.height = Math.round(ch * dpr); }
+    const c = still.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.fillStyle = '#000'; c.fillRect(0, 0, cw, ch);
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(frozen, S.view.ox, S.view.oy, frozen.width * S.view.s, frozen.height * S.view.s);
+  }
+  function redrawFrozen() { drawStill(); drawOverlay(); }
+  function maybeHintPan() {
+    try { if (localStorage.getItem('panHint')) return; localStorage.setItem('panHint', '1'); } catch (e) {}
+    toast('Versleep de foto om te verschuiven, knijp om te zoomen, dubbeltik om passend te maken.');
+  }
+  const ptrs = new Map(); let panMoved = false, lastTap = 0;
+  overlay.addEventListener('pointerdown', e => {
+    if (!S.frozen || !S.view) return;
+    overlay.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+    if (ptrs.size === 1) panMoved = false;
+  });
+  overlay.addEventListener('pointermove', e => {
+    const p = ptrs.get(e.pointerId); if (!p || !S.view) return;
+    const pts = [...ptrs.values()];
+    if (ptrs.size === 1) {
+      if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 8) panMoved = true;
+      if (panMoved) { S.view.ox += e.clientX - p.x; S.view.oy += e.clientY - p.y; S.userView = true; }
+    } else if (ptrs.size === 2) {
+      const other = pts.find(q => q !== p);
+      const d0 = Math.hypot(p.x - other.x, p.y - other.y), d1 = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+      const f = d0 > 0 ? Math.min(1.25, Math.max(0.8, d1 / d0)) : 1;
+      const mx = (e.clientX + other.x) / 2, my = (e.clientY + other.y) / 2;
+      const ns = Math.min(12, Math.max(0.05, S.view.s * f)), k = ns / S.view.s;
+      S.view.ox = mx - (mx - S.view.ox) * k; S.view.oy = my - (my - S.view.oy) * k; S.view.s = ns;
+      panMoved = true; S.userView = true;
+    }
+    p.x = e.clientX; p.y = e.clientY;
+    if (panMoved) redrawFrozen();
+  });
+  const endPtr = e => { ptrs.delete(e.pointerId); };
+  overlay.addEventListener('pointerup', endPtr);
+  overlay.addEventListener('pointercancel', endPtr);
+  overlay.addEventListener('wheel', e => {
+    if (!S.frozen || !S.view) return;
+    e.preventDefault();
+    const k = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    S.view.ox = e.clientX - (e.clientX - S.view.ox) * k; S.view.oy = e.clientY - (e.clientY - S.view.oy) * k; S.view.s *= k;
+    S.userView = true; redrawFrozen();
+  }, { passive: false });
+  overlay.addEventListener('dblclick', () => { if (S.frozen) { S.userView = false; fitView(); redrawFrozen(); } });
 
   /* ------------------------------------------------------- pull-up panel */
   // three resting heights for the table: hidden (peek), half and full; drag the handle or tap it to cycle
@@ -348,6 +429,7 @@
     det.style.height = sheetHeights()[state] + 'px';
     if (!animate) requestAnimationFrame(() => { det.style.transition = ''; });
     $('grab').setAttribute('aria-expanded', String(state !== 'peek'));
+    if (S.frozen && !S.userView) setTimeout(() => { fitView(); redrawFrozen(); }, animate ? 240 : 0);
     $('grabLabel').textContent = state === 'peek' ? 'Sleep omhoog voor de details' : 'Sleep omlaag om het briefje te zien';
   }
   const grabEl = $('grab');
@@ -378,7 +460,7 @@
     if (sheet.suppressClick) { sheet.suppressClick = false; return; }
     setSheet(sheet.state === 'peek' ? 'half' : sheet.state === 'half' ? 'full' : 'peek');
   });
-  window.addEventListener('resize', () => { if (S.frozen) setSheet(sheet.state, false); });
+  window.addEventListener('resize', () => { if (S.frozen) { setSheet(sheet.state, false); if (!S.userView) fitView(); redrawFrozen(); } });
 
   /* ---------------------------------------------------------------- photo */
   async function usePhoto(file) {
@@ -412,6 +494,7 @@
   let editing = null;
   $('detail').onclick = e => { const tr = e.target.closest('tr[data-si]'); if (tr) openEditor(+tr.dataset.si, tr.dataset.ri); };
   overlay.onclick = e => {
+    if (panMoved) { panMoved = false; return; }
     if (!S.frozen || !S.geo.length) return;
     const f2s = frameToScreen(); const px = e.clientX, py = e.clientY;
     for (let si = 0; si < S.geo.length; si++) {
