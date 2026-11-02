@@ -536,7 +536,11 @@
     if (!glyphs.length) return { v: null, conf: 1 };
     const probs = glyphs.map(g => classify(predict, g.mask)).filter(Boolean);
     if (probs.length === 1) {
-      const [k, p] = argmax(probs[0], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0]);
+      // a miss (M, or a 0) is rare on a score sheet: it has to be clearly more likely than a number
+      const q = Float32Array.from(probs[0]); q[0] *= 0.35; q[10] *= 0.35;
+      let t = 0; for (let i = 0; i < q.length; i++) t += q[i];
+      for (let i = 0; i < q.length; i++) q[i] /= t;
+      const [k, p] = argmax(q, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0]);
       const v = k === 0 || k === 10 ? 'M' : k === 11 ? 'X' : k === 12 ? '10' : String(k);
       return { v, conf: p };
     }
