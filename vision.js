@@ -479,7 +479,7 @@
         const ov = Math.min(a.x2, b.x2) - Math.max(a.x, b.x);
         const minw = Math.min(a.x2 - a.x, b.x2 - b.x);
         const vgap = Math.max(a.y, b.y) - Math.min(a.y2, b.y2);
-        if (ov > 0.5 * minw && vgap < ROWH * 0.25) {
+        if (ov > 0.4 * minw && vgap < ROWH * 0.25) {
           a.parts.push(...b.parts); a.x = Math.min(a.x, b.x); a.y = Math.min(a.y, b.y); a.x2 = Math.max(a.x2, b.x2); a.y2 = Math.max(a.y2, b.y2);
           g.splice(j, 1); changed = true;
         }
@@ -564,25 +564,30 @@
 
   /* Ways to read one blob: as 1 digit, or split at the thinnest column into 2 (or 3) digits.
      Each option carries a confidence that includes a width prior: wide blobs are probably several digits. */
+  // top-k readings of one digit (only digits; '10' class excluded in totals)
+  function digitAlts(p, k) {
+    let tot = 0; for (const d of DIGITS) tot += p[d];
+    return DIGITS.map(d => ({ s: String(d), conf: p[d] / tot })).sort((a, b) => b.conf - a.conf).slice(0, k);
+  }
+
   function blobOptions(predict, gm) {
     const p = classify(predict, gm); if (!p) return [];
     // width relative to a normal digit height (tails and loops below the row make blobs taller, not wider)
     const ar = gm.w / Math.min(gm.h, ROWH * 0.75), pSplit = 1 / (1 + Math.exp(-(ar - 1.0) * 6));
-    const whole = digitsOf(p);
-    const opts = [{ s: whole.s, conf: whole.conf * (1 - pSplit), n: 1 }];
+    const opts = digitAlts(p, 3).map(d => ({ s: d.s, conf: d.conf * (1 - pSplit), n: 1 }));
     if (ar > 0.6) {
       const parts = splitGlyph(gm);
       if (parts) {
         const a = classify(predict, parts[0]), b = classify(predict, parts[1]);
         if (a && b) {
-          const da = digitsOf(a), db = digitsOf(b);
-          opts.push({ s: da.s + db.s, conf: da.conf * db.conf * pSplit, n: 2 });
+          const A = digitAlts(a, 2), B = digitAlts(b, 2);
+          for (const x of A) for (const y of B) opts.push({ s: x.s + y.s, conf: x.conf * y.conf * pSplit, n: 2 });
           if (ar > 1.2) { // three touching digits: split the wider half once more
             const wi = parts[0].w >= parts[1].w ? 0 : 1, sub = splitGlyph(parts[wi]);
             if (sub) {
-              const x = sub.map(q => classify(predict, q)); const o = digitsOf(wi ? a : b);
-              if (x[0] && x[1]) { const d0 = digitsOf(x[0]), d1 = digitsOf(x[1]);
-                opts.push({ s: wi === 0 ? d0.s + d1.s + db.s : da.s + d0.s + d1.s, conf: d0.conf * d1.conf * o.conf * pSplit, n: 3 }); }
+              const x = sub.map(q => classify(predict, q)), o = (wi ? A : B)[0];
+              if (x[0] && x[1]) { const d0 = digitAlts(x[0], 1)[0], d1 = digitAlts(x[1], 1)[0];
+                opts.push({ s: wi === 0 ? d0.s + d1.s + o.s : o.s + d0.s + d1.s, conf: d0.conf * d1.conf * o.conf * pSplit, n: 3 }); }
             }
           }
         }
@@ -591,23 +596,27 @@
     return opts;
   }
 
-  /** Read a written number from its blobs, with at most maxDigits digits in total. */
+  /** Read a written number from its blobs, with at most maxDigits digits in total.
+      Also returns cands: other plausible readings with their confidence relative to the best one,
+      so the app can tell "probably misread" from "clearly a different number". */
   function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1) {
     if (!glyphs.length) return { v: null, conf: 1 };
     const all = glyphs.map(g => blobOptions(predict, g.mask)).filter(o => o.length);
     if (!all.length) return { v: null, conf: 1 };
     if (all.length > maxDigits) return { v: '?', conf: 0 };
-    // best combination under the digit budget (few blobs, so brute force)
-    let best = null;
+    const seen = new Map();
     const walk = (i, s, conf, n) => {
       if (n > maxDigits) return;
-      if (i === all.length) { const c = conf * (n < minDigits ? 0.15 : 1); if (!best || c > best.conf) best = { s, conf: c }; return; }
+      if (i === all.length) { const c = conf * (n < minDigits ? 0.15 : 1); if (!seen.has(s) || seen.get(s) < c) seen.set(s, c); return; }
       for (const o of all[i]) walk(i + 1, s + o.s, conf * o.conf, n + o.n);
     };
     walk(0, '', 1, 0);
-    if (!best) return { v: '?', conf: 0 };
+    if (!seen.size) return { v: '?', conf: 0 };
+    const ranked = [...seen].sort((a, b) => b[1] - a[1]);
+    const [bs, bc] = ranked[0];
+    const cands = ranked.slice(0, 10).map(([str, c]) => [str, +(c / bc).toFixed(3)]);
     // report the confidence of the digits themselves, without the width prior
-    return { v: best.s, conf: Math.pow(best.conf, 0.7) };
+    return { v: bs, conf: Math.pow(bc, 0.7), cands };
   }
 
   /** Cut a canonical sheet image (CV_8UC1, grid at PAD, W wide, n rows of ROWH) into glyphs per cell.

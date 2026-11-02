@@ -13,7 +13,7 @@
   const S = {
     mode: 3, frozen: false, source: null, ready: false, busy: false,
     geo: [], frameW: 0, frameH: 0,
-    hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(),
+    hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(), cands: new Map(),
     lastSeen: 0, lastResult: null, frameId: 0, pendingCanon: null
   };
   try { const m = localStorage.getItem('arrowsPerEnd'); if (m === '6') S.mode = 6; else if (m === '25') S.mode = 25; } catch (e) {}
@@ -86,7 +86,14 @@
   }
 
   /* ---------------------------------------------------------------- voting */
-  function resetAll() { S.hist.clear(); S.vals.clear(); S.over.clear(); S.conf.clear(); S.geo = []; }
+  function resetAll() { S.hist.clear(); S.vals.clear(); S.over.clear(); S.conf.clear(); S.cands.clear(); S.geo = []; }
+  // alternative readings of a number over the last frames: reading -> best relative confidence
+  function keepCands(key, cands) {
+    if (!cands) return;
+    const m = S.cands.get(key) || new Map();
+    for (const [str, rel] of cands) m.set(str, Math.max(m.get(str) || 0, rel));
+    S.cands.set(key, m);
+  }
   function vote(key, v, instant, conf) {
     if (conf !== undefined) S.conf.set(key, conf);
     if (instant) { S.hist.set(key, [v]); S.vals.set(key, v); return; }
@@ -119,10 +126,10 @@
       res.sheets.forEach((sh, si) => {
         sh.rows.forEach((r, ri) => {
           r.arrows.forEach((a, k) => vote(`${si}:${ri}:a${k}`, cellVal(a, 'arrow'), instant, a.conf));
-          vote(`${si}:${ri}:sub`, cellVal(r.sub, 'num'), instant, r.sub.conf);
-          if (sh.spans.cum) vote(`${si}:${ri}:cum`, cellVal(r.cum, 'num'), instant, r.cum.conf);
+          vote(`${si}:${ri}:sub`, cellVal(r.sub, 'num'), instant, r.sub.conf); keepCands(`${si}:${ri}:sub`, r.sub.cands);
+          if (sh.spans.cum) { vote(`${si}:${ri}:cum`, cellVal(r.cum, 'num'), instant, r.cum.conf); keepCands(`${si}:${ri}:cum`, r.cum.cands); }
         });
-        if (sh.hasTotal && sh.total) vote(`${si}:t`, cellVal(sh.total, 'num'), instant);
+        if (sh.hasTotal && sh.total) { vote(`${si}:t`, cellVal(sh.total, 'num'), instant); keepCands(`${si}:t`, sh.total.cands); }
       });
       S.lastResult = res;
     } else if (instant) {
@@ -149,6 +156,7 @@
     const is25 = g.layout === '25m1p';
     const ev = evaluate(sheet, is25 ? 3 : S.mode, { noCum: !hasCum });
     if (!is25 && S.mode === 3) crossCheck(si, sheet, ev);
+    verifyCells(si, ev);
     const allStable = stable.every(Boolean) && (!g.hasTotal || tv !== undefined);
     return { sheet, ev, stable, allStable, is25 };
   }
@@ -175,6 +183,20 @@
         if (nc !== null && ns !== null && nc - ns === r.cum.exp) r.cum.st = 'warn';
       }
     });
+  }
+
+  /* The app checks rather than reads: if the correct value is also a plausible reading of the
+     handwriting (at least 20% as likely as the best reading), the cell counts as correct. A real
+     mistake is only flagged when the handwriting clearly says something else. Corrected cells are trusted. */
+  const VERIFY_REL = 0.2;
+  function verifyCells(si, ev) {
+    const check = (key, c) => {
+      if (!c || (c.st !== 'bad' && c.st !== 'warn') || Number.isNaN(c.exp) || S.over.has(key)) return;
+      const m = S.cands.get(key);
+      if (m && (m.get(String(c.exp)) || 0) >= VERIFY_REL) { c.st = 'ok'; c.w = c.exp; }
+    };
+    ev.res.forEach((r, ri) => { check(`${si}:${ri}:sub`, r.sub); check(`${si}:${ri}:cum`, r.cum); });
+    check(`${si}:t`, ev.total);
   }
 
   /* ---------------------------------------------------------------- overlay */
