@@ -5,8 +5,7 @@
   const { evaluate } = self.Scoring;
 
   const ROWH = 40, PAD = 20;
-  const TPL = [0, 0.095, 0.192, 0.289, 0.385, 0.545, 0.708, 0.818, 0.909, 1.0];
-  const SPAN = { a0: [1, 2], a1: [2, 3], a2: [3, 4], sub: [4, 5], cum: [5, 6], row: [0, 6] };
+  const MODES = { '3': '3 pijlen', '6': '6 pijlen', '25': '25M1P' };
   const VOTE_N = 7, VOTE_MIN = 3;
   const CONF = { arrow: 0.5, num: 0.4 };
   const MAX_SIDE = 1280;
@@ -17,7 +16,7 @@
     hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(),
     lastSeen: 0, lastResult: null, frameId: 0, pendingCanon: null
   };
-  try { if (localStorage.getItem('arrowsPerEnd') === '6') S.mode = 6; } catch (e) {}
+  try { const m = localStorage.getItem('arrowsPerEnd'); if (m === '6') S.mode = 6; else if (m === '25') S.mode = 25; } catch (e) {}
 
   const video = $('video'), still = $('still'), overlay = $('overlay');
   const proc = document.createElement('canvas');
@@ -78,7 +77,8 @@
   }
   function send(img, canon) {
     S.busy = true; S.frameId++;
-    worker.postMessage({ type: 'frame', id: S.frameId, buffer: img.data.buffer, width: img.width, height: img.height, canon }, [img.data.buffer]);
+    const layouts = S.mode === 25 ? ['25m1p'] : ['18m3', '25m1p'];
+    worker.postMessage({ type: 'frame', id: S.frameId, buffer: img.data.buffer, width: img.width, height: img.height, canon, layouts }, [img.data.buffer]);
   }
   function loop() {
     if (S.frozen || S.source !== 'camera') return;
@@ -112,15 +112,15 @@
         const a = center(sh.quad), b = center(S.geo[i].quad);
         return Math.hypot(a.x - b.x, a.y - b.y) > 0.25 * res.width;
       }));
-      const sameCard = S.geo.length && res.sheets.length === S.geo.length && res.sheets.every((sh, i) => sh.nrows === S.geo[i].nrows);
+      const sameCard = S.geo.length && res.sheets.length === S.geo.length && res.sheets.every((sh, i) => sh.nrows === S.geo[i].nrows && sh.layout === S.geo[i].layout);
       if (instant || (moved && !sameCard)) resetAll();
       S.frameW = res.width; S.frameH = res.height;
-      S.geo = res.sheets.map(sh => ({ quad: sh.quad, Tinv: sh.Tinv, W: sh.W, H: sh.H, nrows: sh.nrows, hasTotal: sh.hasTotal }));
+      S.geo = res.sheets.map(sh => ({ quad: sh.quad, Tinv: sh.Tinv, W: sh.W, H: sh.H, nrows: sh.nrows, hasTotal: sh.hasTotal, layout: sh.layout, cols: sh.cols, spans: sh.spans, step: sh.step }));
       res.sheets.forEach((sh, si) => {
         sh.rows.forEach((r, ri) => {
           r.arrows.forEach((a, k) => vote(`${si}:${ri}:a${k}`, cellVal(a, 'arrow'), instant, a.conf));
           vote(`${si}:${ri}:sub`, cellVal(r.sub, 'num'), instant, r.sub.conf);
-          vote(`${si}:${ri}:cum`, cellVal(r.cum, 'num'), instant, r.cum.conf);
+          if (sh.spans.cum) vote(`${si}:${ri}:cum`, cellVal(r.cum, 'num'), instant, r.cum.conf);
         });
         if (sh.hasTotal && sh.total) vote(`${si}:t`, cellVal(sh.total, 'num'), instant);
       });
@@ -137,17 +137,20 @@
   const get = key => S.over.has(key) ? S.over.get(key) : S.vals.get(key);
   function sheetModel(si) {
     const g = S.geo[si]; const rows = []; const stable = [];
+    const na = g.spans.arrows.length, hasCum = !!g.spans.cum;
+    const keys = g.spans.arrows.map((_, k) => 'a' + k).concat(['sub'], hasCum ? ['cum'] : []);
     for (let ri = 0; ri < g.nrows; ri++) {
-      const f = ['a0', 'a1', 'a2', 'sub', 'cum'].map(k => get(`${si}:${ri}:${k}`));
+      const f = keys.map(k => get(`${si}:${ri}:${k}`));
       stable.push(f.every(v => v !== undefined));
-      rows.push({ label: String((ri + 1) * 3), arrows: f.slice(0, 3).map(v => v === undefined ? null : v), sub: f[3] ?? null, cum: f[4] ?? null });
+      rows.push({ label: String((ri + 1) * g.step), arrows: f.slice(0, na).map(v => v === undefined ? null : v), sub: f[na] ?? null, cum: hasCum ? (f[na + 1] ?? null) : null });
     }
     const tv = get(`${si}:t`);
     const sheet = { rows, total: g.hasTotal ? { value: tv ?? null } : null };
-    const ev = evaluate(sheet, S.mode);
-    if (S.mode === 3) crossCheck(si, sheet, ev);
+    const is25 = g.layout === '25m1p';
+    const ev = evaluate(sheet, is25 ? 3 : S.mode, { noCum: !hasCum });
+    if (!is25 && S.mode === 3) crossCheck(si, sheet, ev);
     const allStable = stable.every(Boolean) && (!g.hasTotal || tv !== undefined);
-    return { sheet, ev, stable, allStable };
+    return { sheet, ev, stable, allStable, is25 };
   }
 
   /* A reading error and a scoring error look the same in one cell. The neighbouring cells tell them
@@ -186,7 +189,8 @@
     return { x: fx * f2s.s + f2s.ox, y: fy * f2s.s + f2s.oy };
   }
   function cellQuad(g, field, r, f2s) {
-    const span = SPAN[field], x0 = PAD + TPL[span[0]] * g.W, x1 = PAD + TPL[span[1]] * g.W, y0 = PAD + r * ROWH, y1 = y0 + ROWH;
+    const span = field[0] === 'a' ? g.spans.arrows[+field.slice(1)] : g.spans[field];
+    const x0 = PAD + g.cols[span[0]] * g.W, x1 = PAD + g.cols[span[1]] * g.W, y0 = PAD + r * ROWH, y1 = y0 + ROWH;
     return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => canToScreen(g, x, y, f2s));
   }
   const COLORS = { ok: '#2ecc71', bad: '#ff5252', miss: '#6f8dff', warn: '#ffb020' };
@@ -208,9 +212,9 @@
         upTo = upTo && stable[ri];
         const r = ev.res[ri];
         if (stable[ri]) marker(c, cellQuad(g, 'sub', ri, f2s), r.sub);
-        if (upTo) marker(c, cellQuad(g, 'cum', ri, f2s), r.cum);
+        if (upTo && g.spans.cum) marker(c, cellQuad(g, 'cum', ri, f2s), r.cum);
       }
-      if (g.hasTotal && upTo && ev.total && get(`${si}:t`) !== undefined) marker(c, cellQuad(g, 'cum', g.nrows, f2s), ev.total);
+      if (g.hasTotal && upTo && ev.total && get(`${si}:t`) !== undefined) marker(c, cellQuad(g, 'total', g.nrows, f2s), ev.total);
     });
   }
   function poly(c, q) { c.beginPath(); c.moveTo(q[0].x, q[0].y); for (let i = 1; i < q.length; i++) c.lineTo(q[i].x, q[i].y); c.closePath(); }
@@ -239,10 +243,10 @@
 
   /* ---------------------------------------------------------------- panel */
   function render() {
-    $('m3').setAttribute('aria-pressed', S.mode === 3); $('m6').setAttribute('aria-pressed', S.mode === 6);
+    $('m3').setAttribute('aria-pressed', S.mode === 3); $('m6').setAttribute('aria-pressed', S.mode === 6); $('m25').setAttribute('aria-pressed', S.mode === 25);
     drawOverlay();
     const chips = S.geo.map((g, si) => {
-      const { ev, allStable } = sheetModel(si);
+      const { ev, allStable, is25 } = sheetModel(si);
       const all = ev.res.flatMap(r => [r.sub, r.cum]).concat([ev.total]).filter(Boolean);
       const n = st => all.filter(x => x.st === st).length;
       let cls, txt;
@@ -251,7 +255,7 @@
       else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = 'Controleer'; }
       else if (n('miss')) { cls = 'miss'; txt = n('miss') + ' invullen'; }
       else { cls = 'ok'; txt = 'Klopt'; }
-      return `<div class="chip"><div><div class="l">Briefje ${si + 1}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
+      return `<div class="chip"><div><div class="l">Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
     });
     $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? 'Geen tabel gevonden' : 'Zoeken naar scorebriefje…'}</div></div>`;
     if (S.frozen) renderDetail();
@@ -270,17 +274,17 @@
   }
   function renderDetail() {
     const html = S.geo.map((g, si) => {
-      const { sheet, ev } = sheetModel(si);
+      const { sheet, ev, is25 } = sheetModel(si);
       const rows = sheet.rows.map((r, ri) => {
         const rr = ev.res[ri];
         if (rr.role === 'unused' && !rr.sub && !rr.cum && r.arrows.every(a => a === null)) return '';
         const ar = r.arrows.map(a => `<span class="a${a === '?' ? ' q' : ''}">${a === null ? '·' : esc(a)}</span>`).join('');
-        return `<tr data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td>${ar}</td><td>${cellHtml(rr.sub)}</td><td>${cellHtml(rr.cum)}</td></tr>`;
+        return `<tr data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td>${ar}</td><td>${cellHtml(rr.sub)}</td>${is25 ? '' : `<td>${cellHtml(rr.cum)}</td>`}</tr>`;
       }).join('');
-      const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>Totaal</td><td></td><td>${cellHtml(ev.total)}</td></tr>` : '';
-      return `<div class="card"><h2><span>Briefje ${si + 1}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} van ${ev.arrows * 10}</span></h2>
+      const tot = ev.total ? `<tr data-si="${si}" data-ri="t"><td class="pl"></td><td>Totaal</td>${is25 ? '' : '<td></td>'}<td>${cellHtml(ev.total)}</td></tr>` : '';
+      return `<div class="card"><h2><span>Briefje ${si + 1}${is25 ? ' · 25M1P' : ''}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} van ${ev.arrows * 10}</span></h2>
         <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>10'en <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
-        <table><thead><tr><th>Pl.</th><th>Pijlen</th><th>Serie</th><th>Totaal</th></tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
+        <table><thead><tr><th>${is25 ? 'Pr.' : 'Pl.'}</th><th>Pijlen</th><th>Serie</th>${is25 ? '' : '<th>Totaal</th>'}</tr></thead><tbody>${rows}${tot}</tbody></table></div>`;
     }).join('');
     $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">Tik op een regel om een verkeerd gelezen cijfer te verbeteren.</p>';
   }
@@ -324,8 +328,13 @@
   $('go').onclick = startCamera;
 
   /* ---------------------------------------------------------------- mode */
-  function setMode(m) { S.mode = m; try { localStorage.setItem('arrowsPerEnd', String(m)); } catch (e) {} render(); }
-  $('m3').onclick = () => setMode(3); $('m6').onclick = () => setMode(6);
+  function setMode(m) {
+    const was25 = S.mode === 25; S.mode = m;
+    try { localStorage.setItem('arrowsPerEnd', String(m)); } catch (e) {}
+    if (was25 !== (m === 25) && S.source === 'camera') resetAll(); // other kind of sheet: start over
+    render();
+  }
+  $('m3').onclick = () => setMode(3); $('m6').onclick = () => setMode(6); $('m25').onclick = () => setMode(25);
   window.addEventListener('resize', () => render());
 
   /* ---------------------------------------------------------------- editing */
@@ -339,7 +348,8 @@
       for (let ri = 0; ri <= g.nrows; ri++) {
         if (ri === g.nrows && !g.hasTotal) break;
         const q = cellQuad(g, 'row', ri, f2s);
-        if (inside(q, px, py) || inside(cellQuad(g, 'cum', ri, f2s), px, py)) { openEditor(si, ri === g.nrows ? 't' : String(ri)); return; }
+        const extra = ri === g.nrows ? cellQuad(g, 'total', ri, f2s) : cellQuad(g, g.spans.cum ? 'cum' : 'sub', ri, f2s);
+        if (inside(q, px, py) || inside(extra, px, py)) { openEditor(si, ri === g.nrows ? 't' : String(ri)); return; }
       }
     }
   };
@@ -350,13 +360,17 @@
     const show = v => v === null || v === undefined ? '' : v;
     if (ri === 't') {
       $('dlgTitle').textContent = `Briefje ${si + 1} · totaal`;
-      $('dlgArrows').innerHTML = ''; $('dlgArrows').hidden = true; $('dlgSub').parentElement.hidden = true;
+      $('dlgArrows').innerHTML = ''; $('dlgArrows').hidden = true; $('dlgSub').parentElement.hidden = true; $('dlgCum').parentElement.hidden = false;
       $('dlgCum').value = show(get(`${si}:t`));
     } else {
       $('dlgTitle').textContent = `Briefje ${si + 1} · regel ${(+ri + 1) * 3}`;
       $('dlgArrows').hidden = false; $('dlgSub').parentElement.hidden = false;
-      $('dlgArrows').innerHTML = [0, 1, 2].map(k => `<label>Pijl ${k + 1}<input id="dlgA${k}" maxlength="2" value="${esc(show(get(`${si}:${ri}:a${k}`)))}"></label>`).join('');
+      const g = S.geo[si], na = g.spans.arrows.length;
+      $('dlgTitle').textContent = `Briefje ${si + 1} · ${g.layout === '25m1p' ? 'serie' : 'regel'} ${(+ri + 1) * g.step}`;
+      $('dlgArrows').style.gridTemplateColumns = `repeat(${na}, 1fr)`;
+      $('dlgArrows').innerHTML = Array.from({ length: na }, (_, k) => `<label>Pijl ${k + 1}<input id="dlgA${k}" maxlength="2" value="${esc(show(get(`${si}:${ri}:a${k}`)))}"></label>`).join('');
       $('dlgSub').value = show(get(`${si}:${ri}:sub`)); $('dlgCum').value = show(get(`${si}:${ri}:cum`));
+      $('dlgCum').parentElement.hidden = !g.spans.cum;
     }
     $('dlg').showModal();
   }
@@ -367,8 +381,10 @@
     const { si, ri } = editing;
     if (ri === 't') S.over.set(`${si}:t`, clean($('dlgCum').value));
     else {
-      [0, 1, 2].forEach(k => S.over.set(`${si}:${ri}:a${k}`, clean($(`dlgA${k}`).value)));
-      S.over.set(`${si}:${ri}:sub`, clean($('dlgSub').value)); S.over.set(`${si}:${ri}:cum`, clean($('dlgCum').value));
+      const g = S.geo[si];
+      g.spans.arrows.forEach((_, k) => S.over.set(`${si}:${ri}:a${k}`, clean($(`dlgA${k}`).value)));
+      S.over.set(`${si}:${ri}:sub`, clean($('dlgSub').value));
+      if (g.spans.cum) S.over.set(`${si}:${ri}:cum`, clean($('dlgCum').value));
     }
     $('dlg').close(); render();
   };
@@ -389,7 +405,7 @@
       for (let i = 0; i < sh.canon.length; i++) { const v = sh.canon[i]; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
       cx.putImageData(id, 0, 0);
       const model = si < S.geo.length ? sheetModel(si).sheet : null;
-      return { image: c.toDataURL('image/png'), rowHeight: ROWH, pad: PAD, gridWidth: sh.W, columns: TPL, rows: model ? model.rows : [], total: model && model.total ? model.total.value : null };
+      return { image: c.toDataURL('image/png'), layout: sh.layout, rowHeight: ROWH, pad: PAD, gridWidth: sh.W, columns: sh.cols, rowsInImage: sh.nrows + (sh.hasTotal ? 1 : 0), hasTotal: sh.hasTotal, rows: model ? model.rows : [], total: model && model.total ? model.total.value : null };
     });
     const blob = new Blob([JSON.stringify({ app: 'scorebriefje-live', version: 1, created: new Date().toISOString(), sheets })], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);

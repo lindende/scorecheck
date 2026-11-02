@@ -23,7 +23,7 @@ self.onmessage = async ev => {
   const { cv } = await cvReady; await modelReady;
   const t0 = performance.now();
   try {
-    const res = self.ScoreVision.processFrame(cv, { data: new Uint8ClampedArray(m.buffer), width: m.width, height: m.height }, predict, { canon: !!m.canon });
+    const res = self.ScoreVision.processFrame(cv, { data: new Uint8ClampedArray(m.buffer), width: m.width, height: m.height }, predict, { canon: !!m.canon, layouts: m.layouts });
     const transfer = [];
     for (const s of res.sheets) if (s.canon) transfer.push(s.canon.buffer);
     self.postMessage({ type: 'result', id: m.id, ms: performance.now() - t0, result: res }, transfer);

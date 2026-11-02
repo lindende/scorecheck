@@ -33,7 +33,7 @@
   const sum = arr => arr.reduce((t, a) => { const v = arrowVal(a); return v === null || Number.isNaN(v) ? t : t + v; }, 0);
   const used = r => (r.arrows || []).some(a => arrowVal(a) !== null);
 
-  function evaluate(sheet, mode) {
+  function evaluate(sheet, mode, opts) {
     const rows = sheet.rows;
     const res = rows.map(() => ({ sub: null, cum: null, role: 'unused' }));
     const usedIdx = rows.map((r, i) => used(r) ? i : -1).filter(i => i >= 0);
@@ -76,6 +76,7 @@
       if (i > last && last >= 0 && numVal(r.cum) !== null) { res[i].role = 'carry'; res[i].cum = compare(r.cum, cum); }
       if (numVal(r.sub) !== null) res[i].sub = { st: 'warn', exp: NaN, w: numVal(r.sub) };
     });
+    if (opts && opts.noCum) res.forEach(r => { r.cum = null; }); // 25m1p: no running total column
     const total = last >= 0 && sheet.total ? compare(sheet.total.value, cum) : null;
     return { res, cum, total, hits, tens, xs, arrows, unreadable, ends: groups.length };
   }

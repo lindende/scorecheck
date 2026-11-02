@@ -11,6 +11,13 @@
 
   // Column lines as fractions of the grid width: Plaats | 3 arrows | serie | totaal | Hits | 10 | x
   const TPL = [0, 0.095, 0.192, 0.289, 0.385, 0.545, 0.708, 0.818, 0.909, 1.0];
+  /* Score sheet layouts. cols = vertical lines as fractions of the grid width; spans index into cols.
+     18m3: Plaats | 3 arrows | serie | totaal | Hits | 10 | x   (rows 3, 6, 9 ...)
+     25m1p: Pr. | 5 arrows | serie                              (rows 5, 10, 15 ...; total = sum of series) */
+  const LAYOUTS = {
+    '18m3': { id: '18m3', cols: TPL, arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], cum: [5, 6], total: [5, 6], spillRight: 6, step: 3, subDigits: 2 },
+    '25m1p': { id: '25m1p', cols: [0, 0.119, 0.269, 0.416, 0.565, 0.714, 0.862, 1.0], arrows: [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], sub: [6, 7], cum: null, total: [5, 7], spillRight: 7, step: 5, subDigits: 2 }
+  };
   const ROWH = 40;
   const PAD = 20;
   const CLASSES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'M', 'X', '10'];
@@ -132,24 +139,29 @@
     return { bw, hl, vl };
   }
 
-  function analyseWarp(hl, vl) {
+  function analyseWarp(hl, vl, layoutIds) {
     const H = vl.rows, W = vl.cols;
     const xs = peaks(colSums(vl), H * 0.3, W * 0.012);
     if (xs.length < 6) return null;
     let best = null;
-    for (let i = 0; i < xs.length; i++) for (let j = xs.length - 1; j > i; j--) {
-      const L = xs[i], R = xs[j], gw = R - L;
-      if (gw < W * 0.35) break;
-      let hits = 0; const fit = [];
-      for (const t of TPL) {
-        const x = L + t * gw; let bp = x, bd = 1e9;
-        for (const p of xs) { const d = Math.abs(p - x); if (d < bd) { bd = d; bp = p; } }
-        if (bd < gw * 0.025) { hits++; fit.push(bp); } else fit.push(x);
+    for (const id of layoutIds) {
+      const lay = LAYOUTS[id];
+      for (let i = 0; i < xs.length; i++) for (let j = xs.length - 1; j > i; j--) {
+        const L = xs[i], R = xs[j], gw = R - L;
+        if (gw < W * 0.35) break;
+        let hits = 0; const fit = [];
+        for (const t of lay.cols) {
+          const x = L + t * gw; let bp = x, bd = 1e9;
+          for (const p of xs) { const d = Math.abs(p - x); if (d < bd) { bd = d; bp = p; } }
+          if (bd < gw * 0.025) { hits++; fit.push(bp); } else fit.push(x);
+        }
+        // every line of the template should be there; a missing line costs more than an extra one
+        const score = hits / lay.cols.length;
+        if (hits >= lay.cols.length - 2 && (!best || score > best.score + 1e-6)) best = { score, hits, L, R, fit, lay };
       }
-      if (!best || hits > best.hits) best = { hits, L, R, fit };
     }
-    if (!best || best.hits < 7) return null;
-    const { L, R, fit } = best, gw = R - L;
+    if (!best) return null;
+    const { L, R, fit, lay } = best, gw = R - L;
     const x0 = Math.round(L + 0.1 * gw), x1 = Math.round(L + 0.7 * gw);
     const ys = peaks(rowSums(hl, x0, x1), (x1 - x0) * 0.5, H * 0.008);
     if (ys.length < 4) return null;
@@ -184,14 +196,16 @@
       while (bestRun[1] + 1 < ys.length - 1 && sameHeight(bestRun[1] + 1) && partial(ys[bestRun[1] + 1], ys[bestRun[1] + 2])) bestRun[1]++;
     }
     const [a, b] = bestRun;
-    const rows = ys.slice(a, b + 2);
+    let rows = ys.slice(a, b + 2);
+    // the 25m1p header row ("Pr.") has the same boxes as a score row; a sheet has 5 ends
+    if (lay.id === '25m1p' && rows.length - 1 > 5) rows = rows.slice(rows.length - 6);
     const gaps = rows.slice(1).map((y, i) => y - rows[i]).sort((p, q) => p - q);
     const rh = gaps[gaps.length >> 1];
     // a score grid is about 8-9 row heights wide; anything else (e.g. two cards seen as one) is rejected
     if ((R - L) / rh < 5 || (R - L) / rh > 14) return null;
     let total = null;
     if (b + 2 < ys.length) { const g = ys[b + 2] - ys[b + 1]; if (g > 0.6 * rh && g < 1.5 * rh) total = ys[b + 2]; }
-    return { L, R, rows, total, rh };
+    return { L, R, rows, total, rh, layout: lay.id };
   }
 
   function matFrom3x3(cv, a) { return cv.matFromArray(3, 3, cv.CV_64F, a); }
@@ -205,21 +219,21 @@
   function apply3(m, x, y) { const w = m[6] * x + m[7] * y + m[8]; return { x: (m[0] * x + m[1] * y + m[2]) / w, y: (m[3] * x + m[4] * y + m[5]) / w }; }
 
   /** Find score grids. gray: full-res CV_8UC1. Returns [{quad:[tl,tr,br,bl], nrows, hasTotal}] sorted left to right. */
-  function detect(cv, gray) {
+  function detect(cv, gray, layoutIds = Object.keys(LAYOUTS)) {
     // Small score sheets in a big photo need more pixels; try a fast size first, then a larger one.
     const maxSide = Math.max(gray.cols, gray.rows);
     let best = [], bestRows = -1;
     for (const target of [900, 1500]) {
       const scale = Math.min(1, target / maxSide);
-      const found = detectAt(cv, gray, scale);
+      const found = detectAt(cv, gray, scale, layoutIds);
       const rows = found.reduce((t, f) => t + f.nrows, 0);
       if (rows > bestRows) { best = found; bestRows = rows; }
-      if ((found.length && found.every(f => f.nrows >= 8)) || scale === 1) break;
+      if ((found.length && found.every(f => f.nrows >= 4)) || scale === 1) break;
     }
     return best;
   }
 
-  function detectAt(cv, gray, scale) {
+  function detectAt(cv, gray, scale, layoutIds) {
     const small = new cv.Mat();
     if (scale < 0.75) {
       // keep thin printed lines: darkest pixel wins before shrinking
@@ -257,7 +271,7 @@
       const t = Math.max(3, Math.round(Math.max(w, h) * 0.005)) | 1;
       let kk = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, t)); cv.dilate(whl, whl, kk); kk.delete();
       kk = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(t, 1)); cv.dilate(wvl, wvl, kk); kk.delete();
-      const res = analyseWarp(whl, wvl);
+      const res = analyseWarp(whl, wvl, layoutIds);
       const m = Array.from(M.data64F);
       [src, dst, M, whl, wvl].forEach(x => x.delete());
       if (!res) continue;
@@ -265,7 +279,7 @@
       const Minv = inv3(m);
       const quad = [[res.L, res.rows[0]], [res.R, res.rows[0]], [res.R, bot], [res.L, bot]]
         .map(([x, y]) => { const p = apply3(Minv, x, y); return { x: p.x / scale, y: p.y / scale }; });
-      out.push({ quad, nrows: res.rows.length - 1, hasTotal: res.total !== null });
+      out.push({ quad, nrows: res.rows.length - 1, hasTotal: res.total !== null, layout: res.layout });
     }
     [small, bw, hl, vl, lines, hier].forEach(x => x.delete()); contours.delete();
     // the same grid can be found via two contours: keep the one with the most rows
@@ -290,7 +304,8 @@
     const dst = cv.matFromArray(4, 1, cv.CV_32FC2, [PAD, PAD, PAD + W, PAD, PAD + W, PAD + H, PAD, PAD + H]);
     const M = cv.getPerspectiveTransform(src, dst);
     const can = new cv.Mat();
-    cv.warpPerspective(gray, can, M, new cv.Size(W + 2 * PAD, H + 2 * PAD), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255));
+    // extra room right and below: the last column and the total are often written past the border
+    cv.warpPerspective(gray, can, M, new cv.Size(W + 2 * PAD + ROWH, H + 2 * PAD + ROWH / 2), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255));
     const T = Array.from(M.data64F);
     [src, dst, M].forEach(x => x.delete());
     return { can, T, W, H, n };
@@ -350,6 +365,7 @@
       const x = S[i * 5], y = S[i * 5 + 1], w = S[i * 5 + 2], h = S[i * 5 + 3], area = S[i * 5 + 4];
       if (area < 12 || (h < ROWH * 0.18 && w < ROWH * 0.18)) continue;
       if (area > 0.75 * w * h && w * h > 30) continue; // solid block: line remnant, not handwriting
+      if (h > ROWH * 2.2 || w > ROWH * 3) continue; // card edge, table, signature
       comps.push({ id: i, x, y, w, h, area, cx: C[i * 2], cy: C[i * 2 + 1] });
     }
     // also keep small fragments; they may be tails cut off by a row line
@@ -550,7 +566,8 @@
      Each option carries a confidence that includes a width prior: wide blobs are probably several digits. */
   function blobOptions(predict, gm) {
     const p = classify(predict, gm); if (!p) return [];
-    const ar = gm.w / gm.h, pSplit = 1 / (1 + Math.exp(-(ar - 1.0) * 6));
+    // width relative to a normal digit height (tails and loops below the row make blobs taller, not wider)
+    const ar = gm.w / Math.min(gm.h, ROWH * 0.75), pSplit = 1 / (1 + Math.exp(-(ar - 1.0) * 6));
     const whole = digitsOf(p);
     const opts = [{ s: whole.s, conf: whole.conf * (1 - pSplit), n: 1 }];
     if (ar > 0.6) {
@@ -560,7 +577,7 @@
         if (a && b) {
           const da = digitsOf(a), db = digitsOf(b);
           opts.push({ s: da.s + db.s, conf: da.conf * db.conf * pSplit, n: 2 });
-          if (ar > 1.5) { // three touching digits: split the wider half once more
+          if (ar > 1.2) { // three touching digits: split the wider half once more
             const wi = parts[0].w >= parts[1].w ? 0 : 1, sub = splitGlyph(parts[wi]);
             if (sub) {
               const x = sub.map(q => classify(predict, q)); const o = digitsOf(wi ? a : b);
@@ -575,7 +592,7 @@
   }
 
   /** Read a written number from its blobs, with at most maxDigits digits in total. */
-  function readNumber(predict, glyphs, maxDigits = 3) {
+  function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1) {
     if (!glyphs.length) return { v: null, conf: 1 };
     const all = glyphs.map(g => blobOptions(predict, g.mask)).filter(o => o.length);
     if (!all.length) return { v: null, conf: 1 };
@@ -584,7 +601,7 @@
     let best = null;
     const walk = (i, s, conf, n) => {
       if (n > maxDigits) return;
-      if (i === all.length) { if (!best || conf > best.conf) best = { s, conf }; return; }
+      if (i === all.length) { const c = conf * (n < minDigits ? 0.15 : 1); if (!best || c > best.conf) best = { s, conf: c }; return; }
       for (const o of all[i]) walk(i + 1, s + o.s, conf * o.conf, n + o.n);
     };
     walk(0, '', 1, 0);
@@ -595,23 +612,34 @@
 
   /** Cut a canonical sheet image (CV_8UC1, grid at PAD, W wide, n rows of ROWH) into glyphs per cell.
       Returns glyphsOf(row, field) -> [{x, mask:{m,w,h}}] sorted left to right. */
-  function cellGlyphs(cv, can, W, n) {
+  function cellGlyphs(cv, can, W, n, layoutId = '18m3', totalRow = true) {
+    const lay = LAYOUTS[layoutId] || LAYOUTS['18m3'];
     const { ink, gridData } = inkMasks(cv, can);
     const { comps, lab, cols } = components(cv, ink);
     ink.delete();
-    const cx = TPL.map(t => PAD + t * W);
+    const cx = lay.cols.map(t => PAD + t * W);
+    const last = lay.spillRight, colW = cx[1] - cx[0];
+    const spans = lay.arrows.map((sp, k) => ['a' + k, sp]).concat([['sub', lay.sub]], lay.cum ? [['cum', lay.cum]] : []);
+    const rightEdge = (lay.cum || lay.sub)[1];
     const field = c => {
       const x = c.cx;
-      if (x < cx[1] || x > cx[6] + (cx[7] - cx[6]) * 0.35) return null; // allow spill into Hits column
-      if (x < cx[2]) return 'a0'; if (x < cx[3]) return 'a1'; if (x < cx[4]) return 'a2';
-      if (x < cx[5]) return 'sub'; return 'cum';
+      // handwriting may spill a bit past the last read column (into Hits, or past the border)
+      const maxX = last < cx.length - 1 ? cx[last] + (cx[last + 1] - cx[last]) * 0.35 : cx[rightEdge] + colW * 0.8;
+      if (x < cx[1] || x > maxX) return null;
+      for (const [f, [a, b]] of spans) if (x < cx[b]) return f;
+      return spans[spans.length - 1][0];
+    };
+    const totalField = c => {
+      // the Totaal row also holds printed text: only take handwriting-sized marks right of the label
+      if (c.h < ROWH * 0.45 || c.w > ROWH * 2.5) return null; // printed label, or a signature stroke
+      return c.cx >= cx[lay.total[0]] && c.cx <= cx[lay.total[1]] + colW * 1.6 ? 'total' : null;
     };
     const bins = {};
     for (const c of comps) {
       // handwriting starts inside its row and tails may hang into the next one
       const r = Math.floor((c.y + 0.45 * Math.min(c.h, ROWH) - PAD) / ROWH);
       if (r < 0 || r >= n) continue;
-      const f = field(c); if (!f) continue;
+      const f = r === n - 1 && totalRow ? totalField(c) : field(c); if (!f) continue;
       (bins[r + ':' + f] = bins[r + ':' + f] || []).push(c);
     }
     return (r, f) => mergeStacked(bins[r + ':' + f] || []).map(gl => ({ x: gl.x, mask: glyphMask(gl, lab, cols, gridData, true) })).sort((a, b) => a.x - b.x);
@@ -619,18 +647,20 @@
 
   function readSheet(cv, gray, sh, predict, opts) {
     const { can, T, W, H, n } = canonical(cv, gray, sh);
-    const glyphsOf = cellGlyphs(cv, can, W, n);
+    const lay = LAYOUTS[sh.layout] || LAYOUTS['18m3'];
+    const glyphsOf = cellGlyphs(cv, can, W, n, lay.id, sh.hasTotal);
     const rows = [];
     for (let r = 0; r < sh.nrows; r++) {
       rows.push({
-        arrows: ['a0', 'a1', 'a2'].map(f => readArrow(predict, glyphsOf(r, f))),
-        sub: readNumber(predict, glyphsOf(r, 'sub'), 2),
-        cum: readNumber(predict, glyphsOf(r, 'cum'), 3)
+        arrows: lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k))),
+        // a serie or running total below 10 is very unusual: prefer reading two digits
+        sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2),
+        cum: lay.cum ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2) : { v: null, conf: 1 }
       });
     }
     let total = null;
-    if (sh.hasTotal) total = readNumber(predict, glyphsOf(sh.nrows, 'cum'), 3);
-    const out = { rows, total, T, Tinv: inv3(T), W, H };
+    if (sh.hasTotal) total = readNumber(predict, glyphsOf(sh.nrows, 'total'), 3, 3);
+    const out = { rows, total, T, Tinv: inv3(T), W, H, cols: lay.cols, spans: { arrows: lay.arrows, sub: lay.sub, cum: lay.cum, total: lay.total, row: [0, (lay.cum || lay.sub)[1]] }, step: lay.step };
     if (opts && opts.canon) { out.canon = Uint8Array.from(can.data); out.cw = can.cols; out.ch = can.rows; }
     can.delete();
     return out;
@@ -640,7 +670,7 @@
   function processFrame(cv, imageData, predict, opts) {
     const src = cv.matFromImageData(imageData);
     const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY); src.delete();
-    const sheets = detect(cv, gray).slice(0, 3).map(sh => Object.assign(sh, readSheet(cv, gray, sh, predict, opts)));
+    const sheets = detect(cv, gray, (opts && opts.layouts) || Object.keys(LAYOUTS)).slice(0, 3).map(sh => Object.assign(sh, readSheet(cv, gray, sh, predict, opts)));
     gray.delete();
     return { sheets, width: imageData.width, height: imageData.height };
   }
@@ -658,5 +688,5 @@
     can.delete(); r.ink.delete(); return out;
   }
 
-  root.ScoreVision = { _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
+  root.ScoreVision = { LAYOUTS, _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
 })(typeof self !== 'undefined' ? self : globalThis);
