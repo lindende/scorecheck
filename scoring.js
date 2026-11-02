@@ -32,6 +32,9 @@
   const bad = arr => arr.some(a => Number.isNaN(arrowVal(a)));
   const sum = arr => arr.reduce((t, a) => { const v = arrowVal(a); return v === null || Number.isNaN(v) ? t : t + v; }, 0);
   const used = r => (r.arrows || []).some(a => arrowVal(a) !== null);
+  // an unreadable arrow: continue the running total with the written serie, so one doubtful box
+  // does not make every later total unknown
+  const carry = (exp, written) => { const w = numVal(written); return Number.isNaN(exp) && w !== null && !Number.isNaN(w) ? w : exp; };
 
   function evaluate(sheet, mode, opts) {
     const rows = sheet.rows;
@@ -58,13 +61,13 @@
         res[a].role = 'pairStart';
         if (numVal(rows[a].sub) !== null) res[a].sub = compare(rows[a].sub, aSum);
         if (numVal(rows[a].cum) !== null) res[a].cum = compare(rows[a].cum, cum + aSum);
-        cum += exp;
+        cum += carry(exp, rows[b].sub);
         res[b].role = 'end';
         res[b].sub = compare(rows[b].sub, exp);
         res[b].cum = compare(rows[b].cum, cum);
       } else {
         const i = g[0];
-        cum += exp;
+        cum += carry(exp, rows[i].sub);
         res[i].role = perRow ? 'end' : 'half';
         res[i].sub = compare(rows[i].sub, exp);
         res[i].cum = compare(rows[i].cum, cum);

@@ -155,8 +155,10 @@
           for (const p of xs) { const d = Math.abs(p - x); if (d < bd) { bd = d; bp = p; } }
           if (bd < gw * 0.025) { hits++; fit.push(bp); } else fit.push(x);
         }
-        // every line of the template should be there; a missing line costs more than an extra one
-        const score = hits / lay.cols.length;
+        // every line of the template should be there, and lines between the borders that the template
+        // does not explain point to another layout
+        const extra = xs.filter(p => p > L + gw * 0.01 && p < R - gw * 0.01 && !fit.some(f => Math.abs(f - p) < gw * 0.025)).length;
+        const score = hits / lay.cols.length - 0.08 * extra;
         if (hits >= lay.cols.length - 2 && (!best || score > best.score + 1e-6)) best = { score, hits, L, R, fit, lay };
       }
     }
@@ -219,7 +221,83 @@
   function apply3(m, x, y) { const w = m[6] * x + m[7] * y + m[8]; return { x: (m[0] * x + m[1] * y + m[2]) / w, y: (m[3] * x + m[4] * y + m[5]) / w }; }
 
   /** Find score grids. gray: full-res CV_8UC1. Returns [{quad:[tl,tr,br,bl], nrows, hasTotal}] sorted left to right. */
+  /** Dominant directions of the near-horizontal and near-vertical lines, in degrees from level and
+      from upright. They differ when the photo is taken at an angle (perspective shears the grid). */
+  function lineAngles(cv, gray) {
+    const sc = Math.min(1, 640 / Math.max(gray.cols, gray.rows));
+    const small = new cv.Mat(), bw = new cv.Mat(), lines = new cv.Mat();
+    cv.resize(gray, small, new cv.Size(Math.round(gray.cols * sc), Math.round(gray.rows * sc)), 0, 0, cv.INTER_AREA);
+    cv.adaptiveThreshold(small, bw, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 15, 10);
+    const minLen = Math.round(Math.min(small.cols, small.rows) * 0.12);
+    cv.HoughLinesP(bw, lines, 1, Math.PI / 360, 60, minLen, 3);
+    const fam = { h: { hist: new Float32Array(90), segs: [] }, v: { hist: new Float32Array(90), segs: [] } }, d = lines.data32S;
+    for (let i = 0; i < lines.rows; i++) {
+      const x1 = d[i * 4], y1 = d[i * 4 + 1], x2 = d[i * 4 + 2], y2 = d[i * 4 + 3];
+      const len = Math.hypot(x2 - x1, y2 - y1);
+      const edge = (u, v, max) => (u < 4 && v < 4) || (u > max - 5 && v > max - 5);
+      if (edge(x1, x2, small.cols) || edge(y1, y2, small.rows)) continue; // the photo's own border
+      let a = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI; // -180..180
+      a = ((a % 180) + 180) % 180; // 0..180, direction-free
+      let f, off;
+      if (a < 45 || a >= 135) { f = fam.h; off = a >= 135 ? a - 180 : a; } // from level
+      else { f = fam.v; off = a - 90; } // from upright
+      f.hist[Math.min(89, Math.max(0, Math.floor(off + 45)))] += len; f.segs.push([off, len]);
+    }
+    [small, bw, lines].forEach(m => m.delete());
+    const peak = f => {
+      let bi = 0; for (let i = 1; i < 90; i++) if (f.hist[i] > f.hist[bi]) bi = i;
+      if (f.hist[bi] === 0) return null;
+      const p = bi - 45 + 0.5; let sw = 0, sa = 0;
+      for (const [a, len] of f.segs) if (Math.abs(a - p) <= 2) { sw += len; sa += a * len; }
+      return sw ? sa / sw : p;
+    };
+    let h = peak(fam.h); const v = peak(fam.v);
+    // perspective shears a grid by a few degrees, not by more: if the strongest level-ish direction is far
+    // from the upright one (e.g. text or an object on the table), look for a peak near the upright direction
+    if (h !== null && v !== null && Math.abs(h - v) > 10) {
+      const near = { hist: new Float32Array(90), segs: fam.h.segs.filter(([a]) => Math.abs(a - v) <= 8) };
+      for (const [a, len] of near.segs) near.hist[Math.min(89, Math.max(0, Math.floor(a + 45)))] += len;
+      const hn = peak(near);
+      const wNear = near.segs.reduce((t, [, l]) => t + l, 0), wAll = fam.h.segs.reduce((t, [, l]) => t + l, 0);
+      if (hn !== null && wNear > 0.2 * wAll) h = hn;
+    }
+    return { h, v };
+  }
+
   function detect(cv, gray, layoutIds = Object.keys(LAYOUTS)) {
+    // A photo taken at an angle: straighten both line directions first (line detection only works for
+    // lines within a few degrees of level / upright)
+    const ang = lineAngles(cv, gray);
+    if (root.__DBG) root.__DBG.push({ ang });
+    let ah = ang.h ?? ang.v ?? 0, av = ang.v ?? ang.h ?? 0;
+    if (Math.abs(ah) > 2 || Math.abs(av) > 2) {
+      const w = gray.cols, h = gray.rows, rh = ah * Math.PI / 180, rv = av * Math.PI / 180;
+      // columns of B are where a level and an upright line point to now; A = B^-1 makes them level/upright again
+      const b = [Math.cos(rh), -Math.sin(rv), Math.sin(rh), Math.cos(rv)];
+      const det = b[0] * b[3] - b[1] * b[2];
+      if (Math.abs(det) > 0.5) {
+        const a = [b[3] / det, -b[1] / det, -b[2] / det, b[0] / det];
+        const corners = [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => [a[0] * x + a[1] * y, a[2] * x + a[3] * y]);
+        const minX = Math.min(...corners.map(c => c[0])), minY = Math.min(...corners.map(c => c[1]));
+        const W2 = Math.round(Math.max(...corners.map(c => c[0])) - minX), H2 = Math.round(Math.max(...corners.map(c => c[1])) - minY);
+        const m = [a[0], a[1], -minX, a[2], a[3], -minY];
+        const M = cv.matFromArray(2, 3, cv.CV_64F, m), rot = new cv.Mat();
+        cv.warpAffine(gray, rot, M, new cv.Size(W2, H2), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+        M.delete();
+        const found = detectUpright(cv, rot, layoutIds);
+        rot.delete();
+        if (found.length) {
+          // map the corners back into the original photo
+          const Ai = inv3([m[0], m[1], m[2], m[3], m[4], m[5], 0, 0, 1]);
+          for (const f of found) f.quad = f.quad.map(p => apply3(Ai, p.x, p.y));
+          return found;
+        }
+      }
+    }
+    return detectUpright(cv, gray, layoutIds);
+  }
+
+  function detectUpright(cv, gray, layoutIds) {
     // Small score sheets in a big photo need more pixels; try a fast size first, then a larger one.
     const maxSide = Math.max(gray.cols, gray.rows);
     let best = [], bestRows = -1;
@@ -253,14 +331,11 @@
     for (let i = 0; i < contours.size(); i++) { const c = contours.get(i); const a = cv.contourArea(c); if (a >= 0.012 * A) cand.push({ i, a }); c.delete(); }
     cand.sort((p, q) => q.a - p.a);
     const out = [];
-    for (const { i } of cand.slice(0, 6)) {
-      const c = contours.get(i);
-      const rect = cv.minAreaRect(c); c.delete();
-      const pts = orderQuad(cv.RotatedRect.points(rect));
+    const tryQuad = pts => {
       const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
       const w = Math.round(Math.max(dist(pts[0], pts[1]), dist(pts[3], pts[2])));
       const h = Math.round(Math.max(dist(pts[0], pts[3]), dist(pts[1], pts[2])));
-      if (w < 40 || h < 40) continue;
+      if (w < 40 || h < 40) return null;
       const src = cv.matFromArray(4, 1, cv.CV_32FC2, pts.flatMap(p => [p.x, p.y]));
       const dst = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
       const M = cv.getPerspectiveTransform(src, dst);
@@ -274,7 +349,27 @@
       const res = analyseWarp(whl, wvl, layoutIds);
       const m = Array.from(M.data64F);
       [src, dst, M, whl, wvl].forEach(x => x.delete());
-      if (!res) continue;
+      return res ? { res, m } : null;
+    };
+    for (const { i } of cand.slice(0, 6)) {
+      const c = contours.get(i);
+      // two guesses for the sheet outline: the four corners of the shape (corrects a photo taken at an
+      // angle, where the far end of the sheet looks narrower) and the smallest rotated rectangle around it
+      const quads = [];
+      const hull = new cv.Mat(); cv.convexHull(c, hull, false, true);
+      const peri = cv.arcLength(hull, true);
+      for (const eps of [0.02, 0.035, 0.05, 0.08]) {
+        const ap = new cv.Mat(); cv.approxPolyDP(hull, ap, eps * peri, true);
+        if (ap.rows === 4) { const d = ap.data32S; quads.push(orderQuad([0, 1, 2, 3].map(k => ({ x: d[k * 2], y: d[k * 2 + 1] })))); ap.delete(); break; }
+        ap.delete();
+      }
+      hull.delete();
+      quads.push(orderQuad(cv.RotatedRect.points(cv.minAreaRect(c))));
+      c.delete();
+      let best = null;
+      for (const q of quads) { const r = tryQuad(q); if (r && (!best || r.res.rows.length > best.res.rows.length)) best = r; }
+      if (!best) continue;
+      const { res, m } = best;
       const bot = res.total || res.rows[res.rows.length - 1];
       const Minv = inv3(m);
       const quad = [[res.L, res.rows[0]], [res.R, res.rows[0]], [res.R, bot], [res.L, bot]]
@@ -672,7 +767,18 @@
       });
     }
     let total = null;
-    if (sh.hasTotal) total = readNumber(predict, glyphsOf(sh.nrows, 'total'), 3, 3);
+    if (sh.hasTotal) {
+      // the written total is one group of digits; a far-off mark (paper edge, signature) is not part of it
+      const gs = glyphsOf(sh.nrows, 'total'), groups = [];
+      for (const g of gs) {
+        const last = groups[groups.length - 1];
+        if (last && g.x - last.x2 < ROWH * 0.6) { last.items.push(g); last.x2 = Math.max(last.x2, g.x + g.mask.w); last.ink += g.mask.m.reduce((t, v) => t + v, 0); }
+        else groups.push({ items: [g], x2: g.x + g.mask.w, ink: g.mask.m.reduce((t, v) => t + v, 0) });
+      }
+      // most digits wins; on a tie the group nearest the 'Totaal' label (leftmost)
+      const main = groups.sort((a, b) => b.items.length - a.items.length || a.items[0].x - b.items[0].x)[0];
+      total = readNumber(predict, main ? main.items : [], 3, 3);
+    }
     const out = { rows, total, T, Tinv: inv3(T), W, H, cols: lay.cols, spans: { arrows: lay.arrows, sub: lay.sub, cum: lay.cum, total: lay.total, row: [0, (lay.cum || lay.sub)[1]] }, step: lay.step };
     if (opts && opts.canon) { out.canon = Uint8Array.from(can.data); out.cw = can.cols; out.ch = can.rows; }
     can.delete();
@@ -701,5 +807,5 @@
     can.delete(); r.ink.delete(); return out;
   }
 
-  root.ScoreVision = { LAYOUTS, _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
+  root.ScoreVision = { lineAngles, LAYOUTS, _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
 })(typeof self !== 'undefined' ? self : globalThis);
