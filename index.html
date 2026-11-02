@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1318">
+<title>Scorebriefje Live</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+:root{
+  --bg:#0f1318; --panel:rgba(16,20,26,.92); --panel-solid:#161b22; --line:#2a313c; --fg:#eef1f5; --muted:#9aa4b2;
+  --ink:#6f8dff; --ok:#2ecc71; --bad:#ff5252; --miss:#6f8dff; --warn:#ffb020;
+  --f:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --mono:ui-monospace,"Roboto Mono",Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 var(--f);overflow:hidden}
+button{font:inherit;color:inherit}
+button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+#stage{position:fixed;inset:0;background:#000;touch-action:manipulation}
+#video,#still{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#still{display:block}
+#overlay{position:absolute;inset:0;width:100%;height:100%}
+
+.top{position:fixed;left:0;right:0;top:0;padding:calc(10px + env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px));
+  display:flex;align-items:center;gap:10px;background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0));z-index:5}
+.top h1{font-size:17px;font-weight:700;margin:0;flex:1;letter-spacing:.01em}
+.seg{display:inline-flex;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:3px}
+.seg button{border:0;background:transparent;color:var(--muted);font-weight:600;font-size:14px;padding:6px 10px;border-radius:7px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--fg);color:#0f1318}
+.icon{width:40px;height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.5);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.icon svg{width:22px;height:22px}
+.icon[aria-pressed="true"]{background:var(--warn);color:#000;border-color:var(--warn)}
+
+.hint{position:fixed;left:50%;top:calc(70px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:rgba(0,0,0,.7);padding:8px 14px;border-radius:999px;font-size:14px;z-index:4;max-width:calc(100% - 32px);text-align:center}
+
+.sheetbar{position:fixed;left:0;right:0;bottom:0;z-index:5;background:var(--panel);border-top:1px solid var(--line);
+  padding:12px max(12px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;gap:10px;max-height:50vh}
+.chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;flex:none}
+.chip{flex:none;display:flex;align-items:center;gap:10px;background:var(--panel-solid);border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.chip .n{font:700 22px var(--mono);font-variant-numeric:tabular-nums}
+.chip .l{font-size:12px;color:var(--muted)}
+.chip .s{font-size:13px;font-weight:600}
+.s.ok{color:var(--ok)} .s.bad{color:var(--bad)} .s.miss{color:var(--miss)} .s.warn{color:var(--warn)} .s.wait{color:var(--muted)}
+.actions{display:flex;gap:8px;flex:none}
+.btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;border:1px solid var(--line);background:var(--panel-solid);padding:12px;font-weight:600;cursor:pointer;min-height:48px}
+.btn.primary{background:var(--fg);color:#0f1318;border-color:var(--fg)}
+.btn svg{width:20px;height:20px}
+.btn:disabled{opacity:.5}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+.detail{overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
+.card{background:var(--panel-solid);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card h2{font-size:15px;margin:0;padding:10px 12px;display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);text-align:left;padding:6px 10px;font-weight:600}
+td{padding:7px 10px;border-top:1px solid var(--line);font-family:var(--mono)}
+tbody tr{cursor:pointer}
+td.pl{color:var(--muted);width:3em}
+.a{display:inline-block;min-width:1.9em}
+.a.q{color:var(--warn)}
+.c-ok{color:var(--ok)} .c-bad .e{color:var(--bad);font-weight:700} .c-bad .w{text-decoration:line-through;color:var(--muted);margin-right:6px}
+.c-miss .e{color:var(--miss);font-weight:700} .c-warn{color:var(--warn)}
+.counts{display:flex;gap:14px;padding:8px 12px;color:var(--muted);font-size:13px}
+.counts b{color:var(--fg);font-family:var(--mono)}
+
+.start{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:18px;background:var(--bg);
+  padding:24px max(24px,env(safe-area-inset-right,0px)) 24px max(24px,env(safe-area-inset-left,0px))}
+.start h1{font-size:30px;margin:0;line-height:1.1}
+.start p{color:var(--muted);margin:0;max-width:34em}
+.start .err{color:var(--bad)}
+.start .btn{flex:none}
+.progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.progress i{display:block;height:100%;width:0;background:var(--ink);transition:width .3s}
+
+dialog{border:0;padding:0;background:transparent;width:100%;max-width:520px;margin:auto auto 0;color:var(--fg)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.panel{background:var(--panel-solid);border-radius:16px 16px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px}
+.panel h3{margin:0;font-size:18px}
+.panel p{margin:0;color:var(--muted);font-size:14px}
+.fields{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.fields2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.panel label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.panel input{font:600 20px var(--mono);text-align:center;padding:10px 4px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);width:100%;text-transform:uppercase}
+.row{display:flex;gap:10px}
+.toast{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:#0f1318;padding:10px 16px;border-radius:999px;font-weight:600;z-index:20}
+@media (prefers-reduced-motion:reduce){.progress i{transition:none}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="still" hidden></canvas>
+  <canvas id="overlay"></canvas>
+</div>
+
+<header class="top">
+  <h1>Scorebriefje Live</h1>
+  <div class="seg" role="group" aria-label="Pijlen per serie">
+    <button type="button" id="m3" aria-pressed="true">3</button>
+    <button type="button" id="m6" aria-pressed="false">6</button>
+  </div>
+  <button class="icon" id="torch" type="button" aria-label="Lamp" aria-pressed="false" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8l-1 6H9z"/><path d="M9 8v4l-1 2v8h8v-8l-1-2V8"/></svg>
+  </button>
+</header>
+
+<div class="hint" id="hint" hidden></div>
+
+<section class="sheetbar" id="bar">
+  <div class="chips" id="chips"></div>
+  <div class="detail" id="detail" hidden></div>
+  <div class="actions">
+    <button class="btn primary" id="freeze" type="button">Vastzetten</button>
+    <button class="btn" id="photo" type="button">Foto</button>
+    <button class="btn" id="save" type="button" hidden>Trainingsdata</button>
+  </div>
+  <input type="file" id="file" accept="image/*">
+</section>
+
+<div class="start" id="start">
+  <h1>Scorebriefje Live</h1>
+  <p>Richt de camera op het scorebriefje. De app controleert de serie-score en het lopende totaal en toont de juiste waarde waar iets fout of leeg is.</p>
+  <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+  <p id="loadmsg">Herkenning laden…</p>
+  <button class="btn primary" id="go" type="button" disabled>Camera starten</button>
+  <button class="btn" id="gophoto" type="button" disabled>Foto kiezen</button>
+</div>
+
+<dialog id="dlg">
+  <form class="panel" method="dialog" id="dlgForm" autocomplete="off">
+    <h3 id="dlgTitle">Regel</h3>
+    <p>Pas aan wat verkeerd gelezen is. Laat een vak leeg als er niets staat.</p>
+    <div class="fields" id="dlgArrows"></div>
+    <div class="fields2" id="dlgNums">
+      <label>Serie<input id="dlgSub" inputmode="numeric"></label>
+      <label>Totaal<input id="dlgCum" inputmode="numeric"></label>
+    </div>
+    <div class="row">
+      <button class="btn" type="button" id="dlgCancel">Annuleren</button>
+      <button class="btn primary" type="submit" value="ok">Opslaan</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="scoring.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
