@@ -74,6 +74,7 @@ tbody tr{cursor:pointer}
 td.pl{color:var(--muted);width:3em}
 .a{display:inline-block;min-width:1.9em}
 .a.q{color:var(--warn)}
+.a.f{text-decoration:underline dotted var(--warn);text-underline-offset:3px}
 .c-ok{color:var(--ok)} .c-bad .e{color:var(--bad);font-weight:700} .c-bad .w{text-decoration:line-through;color:var(--muted);margin-right:6px}
 .c-miss .e{color:var(--miss);font-weight:700} .c-warn{color:var(--warn)}
 .tw{overflow-x:auto}
@@ -135,9 +136,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 
 <header class="top">
   <h1>ScoreChecker Live</h1>
-  <div class="seg" role="group" aria-label="Pijlen per serie" data-i18n-aria="segAria">
-    <button type="button" id="m3" aria-pressed="true">3</button>
-    <button type="button" id="m6" aria-pressed="false" title="6 pijlen per serie (2 regels van 3)">6</button>
+  <div class="seg" role="group" aria-label="Soort wedstrijd" data-i18n-aria="segAria">
+    <button type="button" id="m18" aria-pressed="true" title="18M: 18 meter indoor, series van 3 pijlen, X wordt niet geschreven">18M</button>
+    <button type="button" id="m5070" aria-pressed="false" title="50/70M: outdoor, series van 3 of 6 pijlen, X wordt geschreven">50/70M</button>
     <button type="button" id="m25" aria-pressed="false" title="25 meter 1 pijl: 5 series van 5 pijlen">25M1P</button>
   </div>
   <button class="icon" id="torch" type="button" aria-label="Lamp" data-i18n-aria="torch" aria-pressed="false" hidden>
@@ -182,7 +183,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <p id="loadmsg">Herkenning laden…</p>
   <button class="btn primary" id="go" type="button" disabled data-i18n="startCamera">Camera starten</button>
   <button class="btn" id="gophoto" type="button" disabled data-i18n="choosePhoto">Foto kiezen</button>
-  <p style="font-size:12px" data-i18n="version">Versie 20 · 3 november 2026</p>
+  <p style="font-size:12px" data-i18n="version">Versie 21 · 3 november 2026</p>
 </div>
 
 <dialog id="dlg">

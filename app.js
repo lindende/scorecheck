@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const { evaluate, evaluateIanseo } = self.Scoring;
+  const { evaluate, evaluateIanseo, resolveTens, numVal } = self.Scoring;
 
   const ROWH = 40, PAD = 20;
   const MODES = { '3': '3 pijlen', '6': '6 pijlen', '25': '25M1P' };
@@ -11,12 +11,16 @@
   const MAX_SIDE = 1280;
 
   const S = {
-    mode: 3, frozen: false, source: null, ready: false, busy: false,
+    mode: 18, frozen: false, source: null, ready: false, busy: false,
     geo: [], frameW: 0, frameH: 0,
     hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(), cands: new Map(),
     lastSeen: 0, lastResult: null, frameId: 0, pendingCanon: null
   };
-  try { const m = localStorage.getItem('arrowsPerEnd'); if (m === '6') S.mode = 6; else if (m === '25') S.mode = 25; } catch (e) {}
+  // kind of match: 18 = 18M indoor (ends of 3, no X written), 5070 = 50/70M outdoor (ends of 3 or 6, X written), 25 = 25M1P
+  try {
+    const m = localStorage.getItem('matchType'), old = localStorage.getItem('arrowsPerEnd');
+    if (m === '5070' || m === '25' || m === '18') S.mode = +m; else if (old === '6') S.mode = 5070; else if (old === '25') S.mode = 25;
+  } catch (e) {}
 
   const video = $('video'), still = $('still'), overlay = $('overlay');
   const proc = document.createElement('canvas');
@@ -26,14 +30,15 @@
   /* ---------------------------------------------------------------- language */
   const I18N = {
     nl: {
-      segAria: 'Pijlen per serie', m25Title: '25 meter 1 pijl: 5 series van 5 pijlen', m25Auto: '25M1P automatisch herkend',
-      m6Title: '6 pijlen per serie (2 regels van 3)', m6Auto: 'Ianseo-briefje herkend: series van 6 pijlen', sum: 'Som', tenX: '10+X', x: 'X',
+      segAria: 'Soort wedstrijd', m25Title: '25 meter 1 pijl: 5 series van 5 pijlen', m25Auto: '25M1P automatisch herkend',
+      m18Title: '18M: 18 meter indoor, series van 3 pijlen, X wordt niet geschreven', m5070Title: '50/70M: outdoor, series van 3 of 6 pijlen, X wordt geschreven',
+      m5070Auto: 'Ianseo-briefje herkend: 50/70M', sum: 'Som', tenX: '10+X', x: 'X', perN: 'series van {n}', filledTen: 'Niet te lezen, maar staat vóór een tien en is dus {v}',
       torch: 'Lamp', photo: 'Foto', training: 'Trainingsdata', freeze: 'Vastzetten', resume: 'Doorgaan', camera: 'Camera',
       targetAria: 'Doelpak met drie pijlen in de 10, de 9 en de 8',
-      intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Werkt voor 18 m (3 of 6 pijlen), 25 m 1 pijl en Ianseo-briefjes voor outdoor; die laatste twee worden vanzelf herkend.',
+      intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Kies bovenin 18M (indoor, series van 3), 50/70M (outdoor, series van 3 of 6, ook Ianseo-briefjes) of 25M1P. Een Ianseo- of 25M1P-briefje wordt vanzelf herkend.',
       exampleAria: 'Voorbeeld: regel 3, pijlen 10, 9 en 8, serie 27 klopt',
       loading: 'Herkenning laden…', ready: 'Klaar. De herkenning werkt op je telefoon zelf, er gaat niets naar internet.',
-      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 20 · 3 november 2026',
+      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 21 · 3 november 2026',
       needHttps: 'De camera werkt alleen als de app via https geopend is.',
       noCamAccess: 'Geen toegang tot de camera. Sta camera-toegang toe voor deze site in de browserinstellingen.',
       camFail: 'De camera kon niet starten ({e}).',
@@ -52,14 +57,15 @@
       langSwitch: 'Switch to English', langOther: 'English'
     },
     en: {
-      segAria: 'Arrows per end', m25Title: '25 metres one spot: 5 ends of 5 arrows', m25Auto: '25M1P detected automatically',
-      m6Title: '6 arrows per end (2 rows of 3)', m6Auto: 'Ianseo card detected: ends of 6 arrows', sum: 'Sum', tenX: '10+X', x: 'X',
+      segAria: 'Kind of match', m25Title: '25 metres one spot: 5 ends of 5 arrows', m25Auto: '25M1P detected automatically',
+      m18Title: '18M: 18 metres indoor, ends of 3 arrows, X is not written', m5070Title: '50/70M: outdoor, ends of 3 or 6 arrows, X is written',
+      m5070Auto: 'Ianseo card detected: 50/70M', sum: 'Sum', tenX: '10+X', x: 'X', perN: 'ends of {n}', filledTen: 'Unreadable, but it comes before a ten, so it is {v}',
       torch: 'Torch', photo: 'Photo', training: 'Training data', freeze: 'Freeze', resume: 'Resume', camera: 'Camera',
       targetAria: 'Target face with three arrows in the 10, the 9 and the 8',
-      intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Works for 18 m (3 or 6 arrows per end), 25 m one spot and Ianseo outdoor cards; the last two are recognised automatically.',
+      intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Choose 18M (indoor, ends of 3), 50/70M (outdoor, ends of 3 or 6, also Ianseo cards) or 25M1P at the top. An Ianseo or 25M1P card is recognised automatically.',
       exampleAria: 'Example: row 3, arrows 10, 9 and 8, end total 27 is correct',
       loading: 'Loading recognition…', ready: 'Ready. Recognition runs on your phone itself; nothing is sent to the internet.',
-      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 20 · 3 November 2026',
+      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 21 · 3 November 2026',
       needHttps: 'The camera only works when the app is opened over https.',
       noCamAccess: 'No access to the camera. Allow camera access for this site in your browser settings.',
       camFail: 'The camera could not start ({e}).',
@@ -157,7 +163,7 @@
   function send(img, canon) {
     S.busy = true; S.frameId++;
     const layouts = S.mode === 25 ? ['25m1p'] : ['18m3', '25m1p', 'ianseo'];
-    worker.postMessage({ type: 'frame', id: S.frameId, buffer: img.data.buffer, width: img.width, height: img.height, canon, layouts }, [img.data.buffer]);
+    worker.postMessage({ type: 'frame', id: S.frameId, buffer: img.data.buffer, width: img.width, height: img.height, canon, layouts, noX: S.mode === 18 }, [img.data.buffer]);
   }
   function loop() {
     if (S.frozen || S.source !== 'camera') return;
@@ -247,19 +253,34 @@
       const keys = g.spans.arrows.map((_, k) => 'a' + k).concat(numFields(g, ri).map(([f]) => f));
       stable.push(keys.every(k => get(`${si}:${ri}:${k}`) !== undefined));
       const label = isIan ? (ri % 2 === 0 ? String(ri / 2 + 1) : '') : String((ri + 1) * g.step);
-      const row = { label, arrows: g.spans.arrows.map((_, k) => val(`${si}:${ri}:a${k}`)), sub: val(`${si}:${ri}:sub`), cum: g.spans.cum ? val(`${si}:${ri}:cum`) : null };
+      const row = { label, arrows: g.spans.arrows.map((_, k) => val(`${si}:${ri}:a${k}`)), sub: val(`${si}:${ri}:sub`), cum: g.spans.cum ? val(`${si}:${ri}:cum`) : null, filled: [] };
+      // arrows go from high to low: an unreadable arrow in front of a ten is a ten (18M) or a 10/X (50/70M)
+      if (!is25) { const r = resolveTens(row.arrows, isIan || S.mode !== 18); row.arrows = r.arrows; row.filled = r.filled; }
       if (isIan) { row.end = val(`${si}:${ri}:end`); row.tx = val(`${si}:${ri}:tx`); row.xx = val(`${si}:${ri}:xx`); }
       rows.push(row);
     }
     const tkeys = g.hasTotal ? numFields(g, 't').map(([f]) => keyOf(si, 't', f)) : [];
     const sheet = { rows, total: g.hasTotal ? { value: val(`${si}:t`) } : null };
     if (isIan) sheet.totals = { ttx: val(`${si}:ttx`), txx: val(`${si}:txx`) };
-    const ev = isIan ? evaluateIanseo(sheet) : evaluate(sheet, is25 ? 3 : S.mode, { noCum: !g.spans.cum });
+    // 50/70M on a club card: ends of 3 or 6, told apart by where the sums are written
+    const per = is25 ? 5 : isIan ? 6 : S.mode === 5070 ? endSize(rows) : 3;
+    const ev = isIan ? evaluateIanseo(sheet) : evaluate(sheet, is25 ? 3 : per, { noCum: !g.spans.cum });
     if (isIan) ianCrossCheck(si, sheet, ev);
-    else if (!is25 && S.mode === 3) crossCheck(si, sheet, ev);
+    else if (!is25 && per === 3) crossCheck(si, sheet, ev);
     verifyCells(si, ev);
     const allStable = stable.every(Boolean) && tkeys.every(k => get(k) !== undefined);
-    return { sheet, ev, stable, allStable, is25, isIan };
+    return { sheet, ev, stable, allStable, is25, isIan, per };
+  }
+
+  /* Ends of 6 on a club card (two rows of 3): the end total and running total are written on the second
+     row only, or an end total is above 30. Otherwise ends of 3. */
+  function endSize(rows) {
+    const used = rows.map((r, i) => r.arrows.some(a => a !== null) ? i : -1).filter(i => i >= 0);
+    if (used.length < 2) return 3;
+    if (used.some(i => { const v = numVal(rows[i].sub); return v !== null && v > 30; })) return 6;
+    const first = used.filter((_, k) => k % 2 === 0), second = used.filter((_, k) => k % 2 === 1);
+    const filled = list => list.filter(i => numVal(rows[i].sub) !== null || numVal(rows[i].cum) !== null).length;
+    return second.length && filled(second) >= 0.6 * second.length && filled(first) <= 0.3 * first.length ? 6 : 3;
   }
 
   /* A reading error and a scoring error look the same in one cell. The neighbouring cells tell them
@@ -396,17 +417,18 @@
   function render() {
     // a 25m1p sheet is recognised by itself; show that in the switch without changing the chosen mode
     const auto25 = S.mode !== 25 && S.geo.length > 0 && S.geo.every(g => g.layout === '25m1p');
-    // an Ianseo card is always counted per 6 arrows: show '6 auto'
-    const autoIan = S.mode !== 6 && S.mode !== 25 && S.geo.length > 0 && S.geo.every(g => g.layout === 'ianseo');
-    const shown = auto25 ? 25 : autoIan ? 6 : S.mode;
-    $('m3').setAttribute('aria-pressed', shown === 3); $('m6').setAttribute('aria-pressed', shown === 6); $('m25').setAttribute('aria-pressed', shown === 25);
+    // an Ianseo card is an outdoor (50/70M) card: show '50/70M auto'
+    const autoIan = S.mode === 18 && S.geo.length > 0 && S.geo.every(g => g.layout === 'ianseo');
+    const shown = auto25 ? 25 : autoIan ? 5070 : S.mode;
+    $('m18').setAttribute('aria-pressed', shown === 18); $('m5070').setAttribute('aria-pressed', shown === 5070); $('m25').setAttribute('aria-pressed', shown === 25);
     $('m25').classList.toggle('auto', auto25);
     $('m25').title = auto25 ? t('m25Auto') : t('m25Title');
-    $('m6').classList.toggle('auto', autoIan);
-    $('m6').title = autoIan ? t('m6Auto') : t('m6Title');
+    $('m5070').classList.toggle('auto', autoIan);
+    $('m5070').title = autoIan ? t('m5070Auto') : t('m5070Title');
+    $('m18').title = t('m18Title');
     drawOverlay();
     const chips = S.geo.map((g, si) => {
-      const { ev, allStable, is25, isIan } = sheetModel(si);
+      const { ev, allStable, is25, isIan, per } = sheetModel(si);
       const all = ev.res.flatMap(r => CELLS.map(f => r[f])).concat([ev.total, ev.ttx, ev.txx]).filter(Boolean);
       const n = st => all.filter(x => x.st === st).length;
       let cls, txt;
@@ -415,7 +437,7 @@
       else if (n('warn') || ev.unreadable) { cls = 'warn'; txt = t('check'); }
       else if (n('miss')) { cls = 'miss'; txt = t('fill', { n: n('miss') }); }
       else { cls = 'ok'; txt = t('ok'); }
-      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">${t('sheet')} ${si + 1}${is25 ? ' · 25M1P' : isIan ? ' · Ianseo' : ''}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
+      return `<div class="chip" data-si="${si}" role="button" tabindex="0"><div><div class="l">${t('sheet')} ${si + 1}${tagOf(is25, isIan, per)}</div><div class="s ${cls}">${txt}</div></div><div class="n">${Number.isNaN(ev.cum) ? '?' : ev.cum}</div></div>`;
     });
     $('chips').innerHTML = chips.join('') || `<div class="chip"><div class="s wait">${S.source === 'photo' ? t('noTable') : t('searching')}</div></div>`;
     if (S.frozen) renderDetail();
@@ -423,6 +445,8 @@
     if (lost) showHint(t('holdFlat')); else if (S.source === 'camera') hideHint();
   }
 
+  // label next to 'Briefje n': the kind of card, and for 50/70M on a club card the end size found
+  const tagOf = (is25, isIan, per) => is25 ? ' · 25M1P' : isIan ? ' · Ianseo' : S.mode === 5070 ? ` · ${t('perN', { n: per })}` : '';
   function cellHtml(c) {
     if (!c || c.st === 'none') return '';
     const exp = Number.isNaN(c.exp) ? '?' : c.exp;
@@ -434,14 +458,16 @@
   }
   function renderDetail() {
     const html = S.geo.map((g, si) => {
-      const { sheet, ev, is25, isIan } = sheetModel(si);
+      const { sheet, ev, is25, isIan, per } = sheetModel(si);
       // columns after the arrows: [header, field]
       const cols = isIan ? [['sum', 'sub'], ['end', 'end'], ['total', 'cum'], ['tenX', 'tx'], ['x', 'xx']]
         : [['end', 'sub']].concat(is25 ? [] : [['total', 'cum']]);
       const rows = sheet.rows.map((r, ri) => {
         const rr = ev.res[ri];
         if (rr.role === 'unused' && !CELLS.some(f => rr[f]) && r.arrows.every(a => a === null)) return '';
-        const ar = r.arrows.map(a => `<span class="a${a === '?' ? ' q' : ''}">${a === null ? '·' : esc(a)}</span>`).join('');
+        const ar = r.arrows.map((a, k) => r.filled.includes(k)
+          ? `<span class="a f" title="${esc(t('filledTen', { v: a }))}">${esc(a)}</span>`
+          : `<span class="a${a === '?' ? ' q' : ''}">${a === null ? '·' : esc(a)}</span>`).join('');
         const cls = isIan && ri % 2 === 0 && ri > 0 ? ' class="ps"' : '';
         return `<tr${cls} data-si="${si}" data-ri="${ri}"><td class="pl">${r.label}</td><td class="ar">${ar}</td>${cols.map(([, f]) => `<td>${cellHtml(rr[f])}</td>`).join('')}</tr>`;
       }).join('');
@@ -451,9 +477,9 @@
         const tc = is25 ? [['', 'cum']] : cols; // 25m1p: total sits under the end column
         tot = `<tr class="ps" data-si="${si}" data-ri="t"><td class="pl"></td><td>${t('total')}</td>${tc.map(([, f]) => `<td>${cellHtml(tcell[f])}</td>`).join('')}</tr>`;
       }
-      const tag = is25 ? ' · 25M1P' : isIan ? ' · Ianseo' : '';
+      const tag = tagOf(is25, isIan, per);
       return `<div class="card" id="card${si}"><h2><span>${t('sheet')} ${si + 1}${tag}</span><span>${Number.isNaN(ev.cum) ? '?' : ev.cum} ${t('of')} ${ev.arrows * 10}</span></h2>
-        <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>${t('tens')} <b>${ev.tens}</b></span><span>X <b>${ev.xs}</b></span></div>
+        <div class="counts"><span>Hits <b>${ev.hits}</b></span><span>${t('tens')} <b>${ev.tens}</b></span><span>X <b>${ev.xs}${ev.xsMaybe ? '–' + (ev.xs + ev.xsMaybe) : ''}</b></span></div>
         <div class="tw"><table${isIan ? ' class="ian"' : ''}><thead><tr><th>${t(is25 || isIan ? 'colRow25' : 'colRow18')}</th><th>${t('arrows')}</th>${cols.map(([h]) => `<th>${t(h)}</th>`).join('')}</tr></thead><tbody>${rows}${tot}</tbody></table></div></div>`;
     }).join('');
     $('detail').innerHTML = html + '<p style="color:var(--muted);font-size:13px;margin:0">' + esc(t('tapRow')) + '</p>';
@@ -634,12 +660,15 @@
 
   /* ---------------------------------------------------------------- mode */
   function setMode(m) {
-    const was25 = S.mode === 25; S.mode = m;
-    try { localStorage.setItem('arrowsPerEnd', String(m)); } catch (e) {}
-    if (was25 !== (m === 25) && S.source === 'camera') resetAll(); // other kind of sheet: start over
+    if (m === S.mode) return;
+    S.mode = m;
+    try { localStorage.setItem('matchType', String(m)); } catch (e) {}
+    // the sheets are read differently per kind of match (X or not, which layouts): read again
+    if (S.source === 'camera') resetAll();
+    else if (S.source === 'photo' && S.ready && proc.width) { send(pctx.getImageData(0, 0, proc.width, proc.height), false); return; }
     render();
   }
-  $('m3').onclick = () => setMode(3); $('m6').onclick = () => setMode(6); $('m25').onclick = () => setMode(25);
+  $('m18').onclick = () => setMode(18); $('m5070').onclick = () => setMode(5070); $('m25').onclick = () => setMode(25);
   window.addEventListener('resize', () => render());
 
   /* ---------------------------------------------------------------- editing */

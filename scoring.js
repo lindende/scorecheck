@@ -12,7 +12,7 @@
     const s = String(a).trim().toUpperCase();
     if (s === '') return null;
     if (s === 'M' || s === '0') return 0;
-    if (s === 'X') return 10;
+    if (s === 'X' || s === '10/X') return 10; // 10/X: a ten, but whether it is an X is not known
     if (/^(10|[1-9])$/.test(s)) return +s;
     return NaN;
   }
@@ -45,7 +45,7 @@
     if (perRow) usedIdx.forEach(i => groups.push([i]));
     else for (let k = 0; k < usedIdx.length; k += 2) groups.push(usedIdx.slice(k, k + 2));
 
-    let cum = 0, hits = 0, tens = 0, xs = 0, arrows = 0, unreadable = false, prevW = 0;
+    let cum = 0, hits = 0, tens = 0, xs = 0, xsMaybe = 0, arrows = 0, unreadable = false, prevW = 0;
     // An unreadable arrow: continue the running total with what the sheet says this end is worth. The
     // written running totals (this one minus the previous one) are preferred over the written end, which
     // may itself be misread, as long as the value fits the arrows that were read. 'self' means it came
@@ -68,7 +68,8 @@
         arrows++;
         if (Number.isNaN(v)) { unreadable = true; continue; }
         if (v > 0) hits++; if (v === 10) tens++;
-        if (String(a).trim().toUpperCase() === 'X') xs++;
+        const u = String(a).trim().toUpperCase();
+        if (u === 'X') xs++; else if (u === '10/X') xsMaybe++;
       }
       const exp = g.some(i => bad(rows[i].arrows)) ? NaN : g.reduce((t, i) => t + sum(rows[i].arrows), 0);
       if (g.length === 2) {
@@ -103,7 +104,7 @@
     });
     if (opts && opts.noCum) res.forEach(r => { r.cum = null; }); // 25m1p: no running total column
     const total = last >= 0 && sheet.total ? compare(sheet.total.value, cum) : null;
-    return { res, cum, total, hits, tens, xs, arrows, unreadable, ends: groups.length };
+    return { res, cum, total, hits, tens, xs, xsMaybe, arrows, unreadable, ends: groups.length };
   }
 
   /* Ianseo outdoor card: two rows of 3 arrows form one end of 6.
@@ -111,12 +112,14 @@
      Second row of a pair: end total (6 arrows) and running total.
      Total row: total score, total 10+X and total X.
      A blank 10+X or X cell is fine when the count is 0. */
-  function countCmp(written, n) {
+  // n..nMax: the count is only known within a range when a ten may also be an X (written as 10/X)
+  function countCmp(written, n, nMax = n) {
     const w = numVal(written);
     if (Number.isNaN(n)) return w === null ? null : { st: 'warn', exp: NaN, w };
     if (w === null) return n === 0 ? null : { st: 'miss', exp: n, w };
     if (Number.isNaN(w)) return { st: 'warn', exp: n, w };
-    return { st: w === n ? 'ok' : 'bad', exp: n, w };
+    if (w >= n && w <= nMax) return { st: 'ok', exp: w, w };
+    return { st: 'bad', exp: w < n ? n : nMax, w };
   }
   function evaluateIanseo(sheet) {
     const rows = sheet.rows;
@@ -126,8 +129,8 @@
     // no arrows read but a sum written: the arrows were not read either
     const unread = r => badI(r.arrows) || (!used(r) && numVal(r.sub) !== null);
     const res = rows.map(() => ({ sub: null, end: null, cum: null, tx: null, xx: null, role: 'unused' }));
-    let cum = 0, hits = 0, tens = 0, xs = 0, arrows = 0, unreadable = false, ends = 0, any = false;
-    let tTen = 0, tX = 0;
+    let cum = 0, hits = 0, tens = 0, xs = 0, xsMaybe = 0, arrows = 0, unreadable = false, ends = 0, any = false;
+    let tTen = 0, tX = 0, tXm = 0;
     for (let p = 0; p < rows.length; p += 2) {
       const pair = [p, p + 1].filter(i => i < rows.length);
       if (!pair.some(i => used(rows[i]))) {
@@ -139,7 +142,7 @@
       for (const i of pair) {
         const r = rows[i];
         res[i].role = i === p ? 'pairStart' : 'end';
-        let ten = 0, x = 0, broken = gap(r.arrows) || (!used(r) && numVal(r.sub) !== null);
+        let ten = 0, x = 0, xm = 0, broken = gap(r.arrows) || (!used(r) && numVal(r.sub) !== null);
         if (broken) unreadable = true;
         for (const a of r.arrows) {
           const v = arrowVal(a); if (v === null) continue;
@@ -147,17 +150,19 @@
           if (Number.isNaN(v)) { unreadable = true; broken = true; continue; }
           if (v > 0) hits++;
           if (v === 10) { tens++; ten++; }
-          if (String(a).trim().toUpperCase() === 'X') { xs++; x++; }
+          const u = String(a).trim().toUpperCase();
+          if (u === 'X') { xs++; x++; } else if (u === '10/X') { xsMaybe++; xm++; }
         }
         if (used(r) || numVal(r.sub) !== null) res[i].sub = compare(r.sub, unread(r) ? NaN : sum(r.arrows));
         if (used(r)) {
           res[i].tx = countCmp(r.tx, broken ? NaN : ten);
-          res[i].xx = countCmp(r.xx, broken ? NaN : x);
+          res[i].xx = countCmp(r.xx, broken ? NaN : x, x + xm);
         }
         // an unreadable arrow: continue with what is written (blank = 0), like the running total
         const w = v => { const n = numVal(v); return n === null ? 0 : n; };
         tTen += broken ? w(r.tx) : ten;
         tX += broken ? w(r.xx) : x;
+        tXm += broken ? w(r.xx) : x + xm;
       }
       const exp = pair.some(i => unread(rows[i])) ? NaN : pair.reduce((t, i) => t + sum(rows[i].arrows), 0);
       const second = pair[pair.length - 1];
@@ -172,9 +177,30 @@
     const tot = sheet.totals || {};
     const total = any && sheet.total ? compare(sheet.total.value, cum) : null;
     const ttx = any && sheet.total ? countCmp(tot.ttx, tTen) : null;
-    const txx = any && sheet.total ? countCmp(tot.txx, tX) : null;
-    return { res, cum, total, ttx, txx, hits, tens, xs, arrows, unreadable, ends };
+    const txx = any && sheet.total ? countCmp(tot.txx, tX, tXm) : null;
+    return { res, cum, total, ttx, txx, hits, tens, xs, xsMaybe, arrows, unreadable, ends };
   }
 
-  root.Scoring = { evaluate, evaluateIanseo, arrowVal, numVal };
+  /* Arrows in a row go from high to low. An unreadable arrow ('?') in front of a 10 is therefore a 10
+     too, or an X where X is written: then a ? in front of an X is an X, and in front of a 10 it is a ten
+     that may be an X ('10/X'). Returns the arrows and the positions that were filled in. */
+  function resolveTens(arrows, allowX) {
+    const out = arrows.slice(), filled = [];
+    let bound = -1; // rank of the nearest arrow to the right: M = 0 … 10, X = 11
+    for (let k = out.length - 1; k >= 0; k--) {
+      const a = out[k];
+      if (a === null || a === undefined) continue;
+      if (a === '?') {
+        if (bound >= 10) { out[k] = !allowX ? '10' : bound === 11 ? 'X' : '10/X'; filled.push(k); }
+        continue; // an unknown arrow is at least the bound: the bound stays
+      }
+      const u = String(a).trim().toUpperCase();
+      const v = arrowVal(u);
+      if (Number.isNaN(v)) continue;
+      bound = u === 'X' ? 11 : v;
+    }
+    return { arrows: out, filled };
+  }
+
+  root.Scoring = { evaluate, evaluateIanseo, resolveTens, arrowVal, numVal };
 })(typeof self !== 'undefined' ? self : globalThis);

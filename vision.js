@@ -733,13 +733,15 @@
   const argmax = (p, allowed) => { let bi = -1, bv = -1; for (const k of allowed) if (p[k] > bv) { bv = p[k]; bi = k; } return [bi, bv]; };
   const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // in totals a wide blob is split instead of read as '10'
 
-  function readArrow(predict, glyphs) {
+  /** noX: the X is not written on this kind of sheet (18 m indoor), so an X-like mark is a 10. */
+  function readArrow(predict, glyphs, noX) {
     if (!glyphs.length) return { v: null, conf: 1 };
     const probs = glyphs.map(g => classify(predict, g.mask)).filter(Boolean);
     if (probs.length === 1) {
       // a miss is rare on a score sheet and written as M: it has to be clearly more likely than a number.
       // A plain 0 is hardly ever written for an arrow; a round shape is mostly a 9 whose stem was lost
       const q = Float32Array.from(probs[0]); q[0] *= 0.03; q[10] *= 0.35;
+      if (noX) { q[12] += q[11]; q[11] = 0; }
       let t = 0; for (let i = 0; i < q.length; i++) t += q[i];
       for (let i = 0; i < q.length; i++) q[i] /= t;
       const [k, p] = argmax(q, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0]);
@@ -902,6 +904,7 @@
     const { can, T, W, H, n } = canonical(cv, gray, sh);
     const lay = LAYOUTS[sh.layout] || LAYOUTS['18m3'];
     const glyphsOf = cellGlyphs(cv, can, W, n, lay.id, sh.hasTotal);
+    const noX = !!(opts && opts.noX) && lay.id === '18m3';
     const rows = [];
     const empty = { v: null, conf: 1 };
     for (let r = 0; r < sh.nrows; r++) {
