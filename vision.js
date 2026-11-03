@@ -15,14 +15,14 @@
      18m3: Plaats | 3 arrows | serie | totaal | Hits | 10 | x   (rows 3, 6, 9 ...)
      25m1p: Pr. | 5 arrows | serie                              (rows 5, 10, 15 ...; total = sum of series) */
   const LAYOUTS = {
-    '18m3': { id: '18m3', cols: TPL, arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], cum: [5, 6], total: [5, 6], spillRight: 6, step: 3, subDigits: 2 },
+    '18m3': { id: '18m3', cols: TPL, arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], cum: [5, 6], total: [5, 6], spillRight: 6, step: 3, subDigits: 2, sorted: true },
     '25m1p': { id: '25m1p', cols: [0, 0.119, 0.269, 0.416, 0.565, 0.714, 0.862, 1.0], arrows: [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]], sub: [6, 7], cum: null, total: [5, 7], spillRight: 7, step: 5, subDigits: 2 },
     /* Ianseo (outdoor): end no. | 3 arrows | Sum | end total | Tot. | 10+X | X. Two rows per end of 6 arrows;
        the end total and running total are on the second row (crossed out on the first). The End|Tot. line
        does not run the full height, so it is not used to recognise the layout (match). */
     'ianseo': { id: 'ianseo', cols: [0, 0.1, 0.225, 0.349, 0.474, 0.605, 0.689, 0.824, 0.912, 1.0], match: [0, 1, 2, 3, 4, 5, 7, 8, 9],
       arrows: [[1, 2], [2, 3], [3, 4]], sub: [4, 5], end: [5, 6], cum: [6, 7], tx: [7, 8], xx: [8, 9],
-      total: [6, 7], ttx: [7, 8], txx: [8, 9], spillRight: 9, step: 1, subDigits: 2, pairs: true }
+      total: [6, 7], ttx: [7, 8], txx: [8, 9], spillRight: 9, step: 1, subDigits: 2, pairs: true, sorted: true }
   };
   const layoutFields = lay => lay.arrows.map((sp, k) => ['a' + k, sp])
     .concat([['sub', lay.sub]], ['end', 'cum', 'tx', 'xx'].filter(f => lay[f]).map(f => [f, lay[f]]))
@@ -734,13 +734,46 @@
       for (let i = 0; i < q.length; i++) q[i] /= t;
       const [k, p] = argmax(q, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0]);
       const v = k === 0 || k === 10 ? 'M' : k === 11 ? 'X' : k === 12 ? '10' : String(k);
-      return { v, conf: p };
+      // probability per score rank (0 = M, 1..10, 11 = X), for the order rule within a row
+      const dist = new Float32Array(12);
+      dist[0] = q[0] + q[10]; for (let d = 1; d <= 9; d++) dist[d] = q[d]; dist[10] = q[12]; dist[11] = q[11];
+      return { v, conf: p, dist };
     }
     if (probs.length === 2) {
       const p = probs[0][1] * probs[1][0];
-      return { v: '10', conf: Math.sqrt(p) };
+      const dist = new Float32Array(12).fill(0.1 / 11); dist[10] = 0.9;
+      return { v: '10', conf: Math.sqrt(p), dist };
     }
     return { v: '?', conf: 0 };
+  }
+
+  /* On a score sheet the arrows in a row are written from high to low (X, 10, 9 … M). A lower value in
+     front of a higher one was misread. Only the arrows that break the order change; their confidence is
+     taken among the values still possible. */
+  const RANK = v => v === 'M' ? 0 : v === 'X' ? 11 : +v;
+  const RANKV = r => r === 0 ? 'M' : r === 11 ? 'X' : String(r);
+  function orderArrows(arrows) {
+    const idx = arrows.map((a, i) => a.dist && a.v !== null && a.v !== '?' ? i : -1).filter(i => i >= 0);
+    if (idx.length < 2) return arrows;
+    const rk = idx.map(i => RANK(arrows[i].v));
+    if (rk.every((r, j) => j === 0 || r <= rk[j - 1])) return arrows; // already in order
+    // the later arrows are taken as read; an arrow lower than one after it is raised to the most likely
+    // value that keeps the order (6-9-8: the 6 is really a 10, an X or a 9)
+    const best = rk.slice();
+    for (let j = idx.length - 2; j >= 0; j--) {
+      if (best[j] >= best[j + 1]) continue;
+      const d = arrows[idx[j]].dist; let br = best[j + 1], bv = -1;
+      for (let r = best[j + 1]; r <= 11; r++) if (d[r] > bv) { bv = d[r]; br = r; }
+      best[j] = br;
+    }
+    const out = arrows.slice();
+    idx.forEach((i, j) => {
+      if (best[j] === rk[j]) return;
+      const hi = j > 0 ? best[j - 1] : 11, lo = j + 1 < idx.length ? best[j + 1] : 0, d = arrows[i].dist;
+      let tot = 0; for (let r = lo; r <= hi; r++) tot += d[r];
+      out[i] = { v: RANKV(best[j]), conf: tot > 0 ? d[best[j]] / tot : 0, dist: d, reordered: true };
+    });
+    return out;
   }
 
   function splitGlyph(gm) {
@@ -863,7 +896,7 @@
     for (let r = 0; r < sh.nrows; r++) {
       const second = !lay.pairs || r % 2 === 1; // Ianseo: end and running total only on the second row
       const row = {
-        arrows: lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k))),
+        arrows: (lay.sorted ? orderArrows : x => x)(lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k)))),
         // a serie or running total below 10 is very unusual: prefer reading two digits
         sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2),
         cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2) : empty
@@ -920,5 +953,5 @@
     can.delete(); r.ink.delete(); return out;
   }
 
-  root.ScoreVision = { lineAngles, LAYOUTS, _debugInk, cellGlyphs, readArrow, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
+  root.ScoreVision = { lineAngles, LAYOUTS, _debugInk, cellGlyphs, readArrow, orderArrows, readNumber, makeModel, processFrame, detect, readSheet, cellRect, apply3, inv3, norm28, CLASSES, ROWH, PAD };
 })(typeof self !== 'undefined' ? self : globalThis);
