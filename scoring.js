@@ -45,7 +45,23 @@
     if (perRow) usedIdx.forEach(i => groups.push([i]));
     else for (let k = 0; k < usedIdx.length; k += 2) groups.push(usedIdx.slice(k, k + 2));
 
-    let cum = 0, hits = 0, tens = 0, xs = 0, arrows = 0, unreadable = false;
+    let cum = 0, hits = 0, tens = 0, xs = 0, arrows = 0, unreadable = false, prevW = 0;
+    // An unreadable arrow: continue the running total with what the sheet says this end is worth. The
+    // written running totals (this one minus the previous one) are preferred over the written end, which
+    // may itself be misread, as long as the value fits the arrows that were read. 'self' means it came
+    // from the running total of this row, which then cannot be checked.
+    const infer = (g, exp, end) => {
+      if (!Number.isNaN(exp)) return { v: exp };
+      let lo = 0, hi = 0;
+      for (const i of g) for (const a of rows[i].arrows) { const v = arrowVal(a); if (v === null) continue; if (Number.isNaN(v)) hi += 10; else { lo += v; hi += v; } }
+      const fits = x => x !== null && !Number.isNaN(x) && x >= lo && x <= hi;
+      const wc = numVal(rows[end].cum), ws = numVal(rows[end].sub);
+      const d = wc !== null && !Number.isNaN(wc) && prevW !== null ? wc - prevW : null;
+      if (fits(d)) return { v: d, self: true };
+      if (fits(ws)) return { v: ws };
+      return { v: NaN };
+    };
+    const nextPrev = end => { const w = numVal(rows[end].cum); prevW = w === null || Number.isNaN(w) ? null : w; };
     for (const g of groups) {
       for (const i of g) for (const a of rows[i].arrows) {
         const v = arrowVal(a); if (v === null) continue;
@@ -61,16 +77,22 @@
         res[a].role = 'pairStart';
         if (numVal(rows[a].sub) !== null) res[a].sub = compare(rows[a].sub, aSum);
         if (numVal(rows[a].cum) !== null) res[a].cum = compare(rows[a].cum, cum + aSum);
-        cum += carry(exp, rows[b].sub);
+        const inf = infer(g, exp, b);
+        cum += inf.v;
         res[b].role = 'end';
         res[b].sub = compare(rows[b].sub, exp);
         res[b].cum = compare(rows[b].cum, cum);
+        if (inf.self && res[b].cum.st === 'ok') res[b].cum.st = 'warn';
+        nextPrev(b);
       } else {
         const i = g[0];
-        cum += carry(exp, rows[i].sub);
+        const inf = infer(g, exp, i);
+        cum += inf.v;
         res[i].role = perRow ? 'end' : 'half';
         res[i].sub = compare(rows[i].sub, exp);
         res[i].cum = compare(rows[i].cum, cum);
+        if (inf.self && res[i].cum.st === 'ok') res[i].cum.st = 'warn';
+        nextPrev(i);
       }
     }
     const last = usedIdx.length ? usedIdx[usedIdx.length - 1] : -1;

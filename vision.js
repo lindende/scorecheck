@@ -523,6 +523,15 @@
     let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(ROWH, 1)); cv.morphologyEx(bw, hl, cv.MORPH_OPEN, k); k.delete();
     k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, ROWH)); cv.morphologyEx(bw, vl, cv.MORPH_OPEN, k); k.delete();
     const W = bw.cols, H = bw.rows, b = bw.data, h = hl.data, v = vl.data;
+    // a long, nearly upright pen stroke (the stem of a 9 reaching into the next row) also survives the
+    // vertical opening; real column lines run through most of the table, so keep only those columns
+    {
+      const cs = new Float32Array(W);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (v[y * W + x]) cs[x]++;
+      const keep = new Uint8Array(W);
+      for (let x = 0; x < W; x++) if (cs[x] > 0.3 * H) for (let d = -3; d <= 3; d++) if (x + d >= 0 && x + d < W) keep[x + d] = 1;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (!keep[x]) v[y * W + x] = 0;
+    }
     const tH = medianRun(h, W, H, true) + 2, tV = medianRun(v, W, H, false) + 2;
     const ink = new Uint8Array(W * H), grid = new Uint8Array(W * H);
     for (let i = 0; i < W * H; i++) { ink[i] = b[i] ? 1 : 0; grid[i] = (h[i] || v[i]) ? 1 : 0; }
@@ -728,8 +737,9 @@
     if (!glyphs.length) return { v: null, conf: 1 };
     const probs = glyphs.map(g => classify(predict, g.mask)).filter(Boolean);
     if (probs.length === 1) {
-      // a miss (M, or a 0) is rare on a score sheet: it has to be clearly more likely than a number
-      const q = Float32Array.from(probs[0]); q[0] *= 0.35; q[10] *= 0.35;
+      // a miss is rare on a score sheet and written as M: it has to be clearly more likely than a number.
+      // A plain 0 is hardly ever written for an arrow; a round shape is mostly a 9 whose stem was lost
+      const q = Float32Array.from(probs[0]); q[0] *= 0.03; q[10] *= 0.35;
       let t = 0; for (let i = 0; i < q.length; i++) t += q[i];
       for (let i = 0; i < q.length; i++) q[i] /= t;
       const [k, p] = argmax(q, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0]);
@@ -741,8 +751,8 @@
     }
     if (probs.length === 2) {
       const p = probs[0][1] * probs[1][0];
-      const dist = new Float32Array(12).fill(0.1 / 11); dist[10] = 0.9;
-      return { v: '10', conf: Math.sqrt(p), dist };
+      const conf = Math.sqrt(p), dist = new Float32Array(12).fill((1 - conf) / 11); dist[10] = conf;
+      return { v: '10', conf, dist };
     }
     return { v: '?', conf: 0 };
   }
@@ -753,7 +763,8 @@
   const RANK = v => v === 'M' ? 0 : v === 'X' ? 11 : +v;
   const RANKV = r => r === 0 ? 'M' : r === 11 ? 'X' : String(r);
   function orderArrows(arrows) {
-    const idx = arrows.map((a, i) => a.dist && a.v !== null && a.v !== '?' ? i : -1).filter(i => i >= 0);
+    // only arrows read with some certainty set the order; a doubtful one shows as '?' anyway
+    const idx = arrows.map((a, i) => a.dist && a.v !== null && a.v !== '?' && a.conf >= 0.5 ? i : -1).filter(i => i >= 0);
     if (idx.length < 2) return arrows;
     const rk = idx.map(i => RANK(arrows[i].v));
     if (rk.every((r, j) => j === 0 || r <= rk[j - 1])) return arrows; // already in order
