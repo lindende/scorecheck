@@ -740,7 +740,11 @@
     if (probs.length === 1) {
       // a miss is rare on a score sheet and written as M: it has to be clearly more likely than a number.
       // A plain 0 is hardly ever written for an arrow; a round shape is mostly a 9 whose stem was lost
-      const q = Float32Array.from(probs[0]); q[0] *= 0.03; q[10] *= 0.35;
+      // no score is written as 0 (a miss is an M): a 0-like mark is a 9 whose stem was lost, or a 10
+      // whose 1 was lost (cut off by a line). Split it over both; the order of the row and the
+      // written sum then decide (10 ? 9 with sum 29 is a 10, 10 9 ? with sum 28 a 9)
+      const zero = probs[0][0] >= 0.5; // the mark itself looks like a 0
+      const q = Float32Array.from(probs[0]); q[9] += q[0] * 0.55; q[12] += q[0] * 0.45; q[0] = 0; q[10] *= 0.35;
       if (noX) { q[12] += q[11]; q[11] = 0; }
       let t = 0; for (let i = 0; i < q.length; i++) t += q[i];
       for (let i = 0; i < q.length; i++) q[i] /= t;
@@ -749,7 +753,8 @@
       // probability per score rank (0 = M, 1..10, 11 = X), for the order rule within a row
       const dist = new Float32Array(12);
       dist[0] = q[0] + q[10]; for (let d = 1; d <= 9; d++) dist[d] = q[d]; dist[10] = q[12]; dist[11] = q[11];
-      return { v, conf: p, dist };
+      // a 0-like mark is a 9 or a 10: never certain by itself, so it shows as '?' unless the row decides
+      return { v, conf: zero ? Math.min(p, 0.45) : p, dist };
     }
     if (probs.length === 2) {
       const p = probs[0][1] * probs[1][0];
@@ -841,7 +846,9 @@
   /** Read a written number from its blobs, with at most maxDigits digits in total.
       Also returns cands: other plausible readings with their confidence relative to the best one,
       so the app can tell "probably misread" from "clearly a different number". */
-  function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1) {
+  /** maxVal: the highest value this cell can hold (30 for the sum of 3 arrows, …): readings above it
+      are not possible and the next best reading is taken. */
+  function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1, maxVal = Infinity) {
     if (!glyphs.length) return { v: null, conf: 1 };
     const all = glyphs.map(g => blobOptions(predict, g.mask)).filter(o => o.length);
     if (!all.length) return { v: null, conf: 1 };
@@ -849,7 +856,7 @@
     const seen = new Map();
     const walk = (i, s, conf, n) => {
       if (n > maxDigits) return;
-      if (i === all.length) { const c = conf * (n < minDigits ? 0.15 : 1); if (!seen.has(s) || seen.get(s) < c) seen.set(s, c); return; }
+      if (i === all.length) { if (+s > maxVal) return; const c = conf * (n < minDigits ? 0.15 : 1); if (!seen.has(s) || seen.get(s) < c) seen.set(s, c); return; }
       for (const o of all[i]) walk(i + 1, s + o.s, conf * o.conf, n + o.n);
     };
     walk(0, '', 1, 0);
@@ -905,19 +912,24 @@
     const lay = LAYOUTS[sh.layout] || LAYOUTS['18m3'];
     const glyphsOf = cellGlyphs(cv, can, W, n, lay.id, sh.hasTotal);
     const noX = !!(opts && opts.noX) && lay.id === '18m3';
+    // most a number can be: 10 points per arrow. A row sum of 3 arrows is at most 30; on a club card
+    // outside 18M a row may close an end of 6 (60)
+    const na = lay.arrows.length;
+    const subMax = lay.id === '18m3' && !noX ? 2 * na * 10 : na * 10;
     const rows = [];
     const empty = { v: null, conf: 1 };
     for (let r = 0; r < sh.nrows; r++) {
       const second = !lay.pairs || r % 2 === 1; // Ianseo: end and running total only on the second row
       const row = {
-        arrows: (lay.sorted ? orderArrows : x => x)(lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k)))),
+        arrows: (lay.sorted ? orderArrows : x => x)(lay.arrows.map((_, k) => readArrow(predict, glyphsOf(r, 'a' + k), noX))),
         // a serie or running total below 10 is very unusual: prefer reading two digits
-        sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2),
-        cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2) : empty
+        sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2, subMax),
+        // (a running total is bounded with two rows to spare: the top row of the card may be cut off)
+        cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2, (r + 3) * na * 10) : empty
       };
-      if (lay.end) row.end = second ? readNumber(predict, glyphsOf(r, 'end'), 2, 2) : empty;
-      if (lay.tx) row.tx = readNumber(predict, glyphsOf(r, 'tx'), 1, 1);
-      if (lay.xx) row.xx = readNumber(predict, glyphsOf(r, 'xx'), 1, 1);
+      if (lay.end) row.end = second ? readNumber(predict, glyphsOf(r, 'end'), 2, 2, 2 * na * 10) : empty;
+      if (lay.tx) row.tx = readNumber(predict, glyphsOf(r, 'tx'), 1, 1, na);
+      if (lay.xx) row.xx = readNumber(predict, glyphsOf(r, 'xx'), 1, 1, na);
       rows.push(row);
     }
     let total = null;
@@ -932,9 +944,9 @@
       }
       // most digits wins; on a tie the group nearest the 'Totaal' label (leftmost)
       const main = groups.sort((a, b) => b.items.length - a.items.length || a.items[0].x - b.items[0].x)[0];
-      total = readNumber(predict, main ? main.items : [], 3, 3);
-      if (lay.ttx) totals.ttx = readNumber(predict, glyphsOf(sh.nrows, 'ttx'), 2, 1);
-      if (lay.txx) totals.txx = readNumber(predict, glyphsOf(sh.nrows, 'txx'), 2, 1);
+      total = readNumber(predict, main ? main.items : [], 3, 3, sh.nrows * na * 10);
+      if (lay.ttx) totals.ttx = readNumber(predict, glyphsOf(sh.nrows, 'ttx'), 2, 1, sh.nrows * na);
+      if (lay.txx) totals.txx = readNumber(predict, glyphsOf(sh.nrows, 'txx'), 2, 1, sh.nrows * na);
     }
     const rightEdge = Math.max(...layoutFields(lay).map(([, sp]) => sp[1]));
     const out = { rows, total, totals, T, Tinv: inv3(T), W, H, cols: lay.cols,
