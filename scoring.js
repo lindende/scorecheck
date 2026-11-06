@@ -62,7 +62,8 @@
       return { v: NaN };
     };
     // the first running total equals the first end: leaving it blank is fine
-    const firstBlank = i => g0 === i && numVal(rows[i].cum) === null;
+    // (an unreadable speck there counts as blank too: only a clearly different number matters)
+    const firstBlank = i => g0 === i && (numVal(rows[i].cum) === null || Number.isNaN(numVal(rows[i].cum)));
     let g0 = null;
     const nextPrev = end => { const w = numVal(rows[end].cum); prevW = w === null || Number.isNaN(w) ? null : w; };
     for (const g of groups) {
@@ -103,7 +104,10 @@
     const last = usedIdx.length ? usedIdx[usedIdx.length - 1] : -1;
     rows.forEach((r, i) => {
       if (res[i].role !== 'unused') return;
-      if (i > last && last >= 0 && numVal(r.cum) !== null) { res[i].role = 'carry'; res[i].cum = compare(r.cum, cum); }
+      // a total repeated in an empty row after the last end; an unreadable mark there (the tail of a
+      // digit from the row above) is ignored
+      const wc = numVal(r.cum);
+      if (i > last && last >= 0 && wc !== null && !Number.isNaN(wc)) { res[i].role = 'carry'; res[i].cum = compare(r.cum, cum); }
       if (numVal(r.sub) !== null) res[i].sub = { st: 'warn', exp: NaN, w: numVal(r.sub) };
     });
     if (opts && opts.noCum) res.forEach(r => { r.cum = null; }); // 25m1p: no running total column
@@ -176,7 +180,7 @@
       if (second !== p && !open) {
         res[second].end = compare(rows[second].end, exp);
         // the first running total equals the first end: leaving it blank is fine
-        res[second].cum = ends === 1 && numVal(rows[second].cum) === null ? null : compare(rows[second].cum, cum);
+        res[second].cum = ends === 1 && (numVal(rows[second].cum) === null || Number.isNaN(numVal(rows[second].cum))) ? null : compare(rows[second].cum, cum);
       }
     }
     const tot = sheet.totals || {};

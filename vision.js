@@ -848,7 +848,7 @@
       so the app can tell "probably misread" from "clearly a different number". */
   /** maxVal: the highest value this cell can hold (30 for the sum of 3 arrows, …): readings above it
       are not possible and the next best reading is taken. */
-  function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1, maxVal = Infinity) {
+  function readNumber(predict, glyphs, maxDigits = 3, minDigits = 1, maxVal = Infinity, minVal = 0) {
     if (!glyphs.length) return { v: null, conf: 1 };
     const all = glyphs.map(g => blobOptions(predict, g.mask)).filter(o => o.length);
     if (!all.length) return { v: null, conf: 1 };
@@ -856,7 +856,7 @@
     const seen = new Map();
     const walk = (i, s, conf, n) => {
       if (n > maxDigits) return;
-      if (i === all.length) { if (+s > maxVal) return; const c = conf * (n < minDigits ? 0.15 : 1); if (!seen.has(s) || seen.get(s) < c) seen.set(s, c); return; }
+      if (i === all.length) { if (+s > maxVal || +s < minVal) return; const c = conf * (n < minDigits ? 0.15 : 1); if (!seen.has(s) || seen.get(s) < c) seen.set(s, c); return; }
       for (const o of all[i]) walk(i + 1, s + o.s, conf * o.conf, n + o.n);
     };
     walk(0, '', 1, 0);
@@ -904,7 +904,11 @@
       const f = r === n - 1 && totalRow ? totalField(c) : field(c); if (!f) continue;
       (bins[r + ':' + f] = bins[r + ':' + f] || []).push(c);
     }
-    return (r, f) => mergeStacked(bins[r + ':' + f] || []).map(gl => ({ x: gl.x, mask: glyphMask(gl, lab, cols, gridData, true) })).sort((a, b) => a.x - b.x);
+    // a short thin stroke right next to a column line is what is left of the line (a double line
+    // between columns), not a digit
+    const nearLine = (x, w) => cx.some(c => Math.abs(x + w / 2 - c) < 6);
+    const speck = g => g.mask.w <= ROWH * 0.12 && g.mask.h < ROWH * 0.4 && nearLine(g.x, g.mask.w);
+    return (r, f) => mergeStacked(bins[r + ':' + f] || []).map(gl => ({ x: gl.x, mask: glyphMask(gl, lab, cols, gridData, true) })).filter(g => !speck(g)).sort((a, b) => a.x - b.x);
   }
 
   function readSheet(cv, gray, sh, predict, opts) {
@@ -918,6 +922,9 @@
     const subMax = lay.id === '18m3' && !noX ? 2 * na * 10 : na * 10;
     const rows = [];
     const empty = { v: null, conf: 1 };
+    // the running total only goes up: 95 after 167 (read with confidence) is a 195 whose 1 was lost.
+    // (No upper bound from it: one misread total would then block all later ones.)
+    let lastCum = null;
     for (let r = 0; r < sh.nrows; r++) {
       const second = !lay.pairs || r % 2 === 1; // Ianseo: end and running total only on the second row
       const row = {
@@ -925,8 +932,10 @@
         // a serie or running total below 10 is very unusual: prefer reading two digits
         sub: readNumber(predict, glyphsOf(r, 'sub'), lay.subDigits, 2, subMax),
         // (a running total is bounded with two rows to spare: the top row of the card may be cut off)
-        cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2, (r + 3) * na * 10) : empty
+        cum: lay.cum && second ? readNumber(predict, glyphsOf(r, 'cum'), 3, 2,
+          (r + 3) * na * 10, lastCum ? lastCum.v : 0) : empty
       };
+      if (row.cum.v !== null && /^\d+$/.test(row.cum.v) && row.cum.conf >= 0.7) lastCum = { v: +row.cum.v, r };
       if (lay.end) row.end = second ? readNumber(predict, glyphsOf(r, 'end'), 2, 2, 2 * na * 10) : empty;
       if (lay.tx) row.tx = readNumber(predict, glyphsOf(r, 'tx'), 1, 1, na);
       if (lay.xx) row.xx = readNumber(predict, glyphsOf(r, 'xx'), 1, 1, na);
