@@ -61,8 +61,12 @@
       if (fits(ws)) return { v: ws };
       return { v: NaN };
     };
+    // the first running total equals the first end: leaving it blank is fine
+    const firstBlank = i => g0 === i && numVal(rows[i].cum) === null;
+    let g0 = null;
     const nextPrev = end => { const w = numVal(rows[end].cum); prevW = w === null || Number.isNaN(w) ? null : w; };
     for (const g of groups) {
+      if (g0 === null) g0 = g[g.length - 1];
       for (const i of g) for (const a of rows[i].arrows) {
         const v = arrowVal(a); if (v === null) continue;
         arrows++;
@@ -82,8 +86,8 @@
         cum += inf.v;
         res[b].role = 'end';
         res[b].sub = compare(rows[b].sub, exp);
-        res[b].cum = compare(rows[b].cum, cum);
-        if (inf.self && res[b].cum.st === 'ok') res[b].cum.st = 'warn';
+        res[b].cum = firstBlank(b) ? null : compare(rows[b].cum, cum);
+        if (inf.self && res[b].cum && res[b].cum.st === 'ok') res[b].cum.st = 'warn';
         nextPrev(b);
       } else {
         const i = g[0];
@@ -91,8 +95,8 @@
         cum += inf.v;
         res[i].role = perRow ? 'end' : 'half';
         res[i].sub = compare(rows[i].sub, exp);
-        res[i].cum = compare(rows[i].cum, cum);
-        if (inf.self && res[i].cum.st === 'ok') res[i].cum.st = 'warn';
+        res[i].cum = firstBlank(i) ? null : compare(rows[i].cum, cum);
+        if (inf.self && res[i].cum && res[i].cum.st === 'ok') res[i].cum.st = 'warn';
         nextPrev(i);
       }
     }
@@ -171,7 +175,8 @@
       const open = !used(rows[second]) && numVal(rows[second].sub) === null && numVal(rows[second].end) === null && numVal(rows[second].cum) === null;
       if (second !== p && !open) {
         res[second].end = compare(rows[second].end, exp);
-        res[second].cum = compare(rows[second].cum, cum);
+        // the first running total equals the first end: leaving it blank is fine
+        res[second].cum = ends === 1 && numVal(rows[second].cum) === null ? null : compare(rows[second].cum, cum);
       }
     }
     const tot = sheet.totals || {};
