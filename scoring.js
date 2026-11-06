@@ -181,26 +181,57 @@
     return { res, cum, total, ttx, txx, hits, tens, xs, xsMaybe, arrows, unreadable, ends };
   }
 
-  /* Arrows in a row go from high to low. An unreadable arrow ('?') in front of a 10 is therefore a 10
-     too, or an X where X is written: then a ? in front of an X is an X, and in front of a 10 it is a ten
-     that may be an X ('10/X'). Returns the arrows and the positions that were filled in. */
-  function resolveTens(arrows, allowX) {
+  /* Arrows in a row go from high to low (X, 10, 9 … M), so an unreadable arrow ('?') lies between its
+     neighbours: 9 ? 9 is 9, 10 ? 9 is 10 or 9, ? 10 is 10 (or X where X is written).
+     With two possible values the reading of the mark itself decides (dists[k]: probability per rank,
+     0 = M … 10, 11 = X, summed over the frames); is that unclear, the written row sum; is that unclear
+     too: a ten that may be an X stays '10/X', any other pair goes to the more likely reading.
+     More than two possible values: only filled in when the mark is clearly one of them.
+     Returns the arrows and the positions that were filled in. */
+  const RV = r => r === 11 ? 'X' : r === 0 ? 'M' : String(r);
+  const rankOf = a => { const u = String(a).trim().toUpperCase(); if (u === 'X') return 11; const v = arrowVal(u); return Number.isNaN(v) || v === null ? null : v; };
+  function resolveArrows(arrows, allowX, dists, sub) {
     const out = arrows.slice(), filled = [];
-    let bound = -1; // rank of the nearest arrow to the right: M = 0 … 10, X = 11
-    for (let k = out.length - 1; k >= 0; k--) {
-      const a = out[k];
-      if (a === null || a === undefined) continue;
-      if (a === '?') {
-        if (bound >= 10) { out[k] = !allowX ? '10' : bound === 11 ? 'X' : '10/X'; filled.push(k); }
-        continue; // an unknown arrow is at least the bound: the bound stays
+    const top = allowX ? 11 : 10;
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      for (let k = 0; k < out.length; k++) {
+        if (out[k] !== '?' && out[k] !== '10/X') continue;
+        let hi = top, lo = 0;
+        for (let j = k - 1; j >= 0; j--) { if (out[j] === null || out[j] === '?') continue; hi = out[j] === '10/X' ? 11 : rankOf(out[j]); break; }
+        for (let j = k + 1; j < out.length; j++) { if (out[j] === null || out[j] === '?') continue; lo = out[j] === '10/X' ? 10 : rankOf(out[j]); break; }
+        if (hi === null || lo === null) continue;
+        hi = Math.min(hi, top);
+        if (out[k] === '10/X') lo = Math.max(lo, 10);
+        if (lo > hi) continue; // the row is not in order: leave it
+        const cands = []; for (let r = hi; r >= lo; r--) cands.push(r);
+        const d = dists && dists[k];
+        const p = cands.map(r => d ? d[r] : 0), ps = p.reduce((a, b) => a + b, 0);
+        const best = ps > 0 ? cands[p.indexOf(Math.max(...p))] : null;
+        // the written row sum, when all other arrows are known
+        let bySum = null;
+        const w = numVal(sub);
+        if (w !== null && !Number.isNaN(w) && out.every((a, j) => j === k || (a !== '?' && a !== null))) {
+          const rest = out.reduce((t, a, j) => j === k ? t : t + arrowVal(a), 0);
+          const fit = cands.filter(r => (r === 11 ? 10 : r) === w - rest);
+          if (fit.length === 1) bySum = fit[0];
+        }
+        let v = null;
+        if (cands.length === 1) v = RV(cands[0]);
+        else if (cands.length === 2) {
+          const sure = ps > 0 && Math.max(...p) >= 2 * Math.min(...p);
+          if (sure) v = RV(best);
+          else if (bySum !== null) v = RV(bySum);
+          else if (cands[0] === 11 && cands[1] === 10) v = '10/X';
+          else if (best !== null) v = RV(best);
+        } else if (ps > 0 && Math.max(...p) / ps >= 0.7) v = RV(best);
+        if (v !== null && v !== out[k]) { out[k] = v; if (!filled.includes(k)) filled.push(k); changed = true; }
       }
-      const u = String(a).trim().toUpperCase();
-      const v = arrowVal(u);
-      if (Number.isNaN(v)) continue;
-      bound = u === 'X' ? 11 : v;
+      if (!changed) break;
     }
     return { arrows: out, filled };
   }
+  const resolveTens = (arrows, allowX) => resolveArrows(arrows, allowX);
 
-  root.Scoring = { evaluate, evaluateIanseo, resolveTens, arrowVal, numVal };
+  root.Scoring = { evaluate, evaluateIanseo, resolveArrows, resolveTens, arrowVal, numVal };
 })(typeof self !== 'undefined' ? self : globalThis);

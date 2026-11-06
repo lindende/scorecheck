@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const { evaluate, evaluateIanseo, resolveTens, numVal } = self.Scoring;
+  const { evaluate, evaluateIanseo, resolveArrows, numVal } = self.Scoring;
 
   const ROWH = 40, PAD = 20;
   const MODES = { '3': '3 pijlen', '6': '6 pijlen', '25': '25M1P' };
@@ -13,7 +13,7 @@
   const S = {
     mode: 18, frozen: false, source: null, ready: false, busy: false,
     geo: [], frameW: 0, frameH: 0,
-    hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(), cands: new Map(),
+    hist: new Map(), vals: new Map(), over: new Map(), conf: new Map(), cands: new Map(), dist: new Map(),
     lastSeen: 0, lastResult: null, frameId: 0, pendingCanon: null
   };
   // kind of match: 18 = 18M indoor (ends of 3, no X written), 5070 = 50/70M outdoor (ends of 3 or 6, X written), 25 = 25M1P
@@ -32,13 +32,13 @@
     nl: {
       segAria: 'Soort wedstrijd', m25Title: '25 meter 1 pijl: 5 series van 5 pijlen', m25Auto: '25M1P automatisch herkend',
       m18Title: '18M: 18 meter indoor, series van 3 pijlen, X wordt niet geschreven', m5070Title: '50/70M: outdoor, series van 3 of 6 pijlen, X wordt geschreven',
-      m5070Auto: 'Ianseo-briefje herkend: 50/70M', sum: 'Som', tenX: '10+X', x: 'X', perN: 'series van {n}', filledTen: 'Niet te lezen, maar staat vóór een tien en is dus {v}',
+      m5070Auto: 'Ianseo-briefje herkend: 50/70M', sum: 'Som', tenX: '10+X', x: 'X', perN: 'series van {n}', filledTen: 'Niet goed te lezen; de pijlen staan van hoog naar laag, dus dit is {v}',
       torch: 'Lamp', photo: 'Foto', training: 'Trainingsdata', freeze: 'Vastzetten', resume: 'Doorgaan', camera: 'Camera',
       targetAria: 'Doelpak met drie pijlen in de 10, de 9 en de 8',
       intro: 'Richt de camera op het scorebriefje. De app telt de pijlen na en controleert de series en het totaal. Kies bovenin 18M (indoor, series van 3), 50/70M (outdoor, series van 3 of 6, ook Ianseo-briefjes) of 25M1P. Een Ianseo- of 25M1P-briefje wordt vanzelf herkend.',
       exampleAria: 'Voorbeeld: regel 3, pijlen 10, 9 en 8, serie 27 klopt',
       loading: 'Herkenning laden…', ready: 'Klaar. De herkenning werkt op je telefoon zelf, er gaat niets naar internet.',
-      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 21 · 3 november 2026',
+      loadFail: 'Herkenning kon niet laden: {e}', startCamera: 'Camera starten', choosePhoto: 'Foto kiezen', version: 'Versie 22 · 6 november 2026',
       needHttps: 'De camera werkt alleen als de app via https geopend is.',
       noCamAccess: 'Geen toegang tot de camera. Sta camera-toegang toe voor deze site in de browserinstellingen.',
       camFail: 'De camera kon niet starten ({e}).',
@@ -59,13 +59,13 @@
     en: {
       segAria: 'Kind of match', m25Title: '25 metres one spot: 5 ends of 5 arrows', m25Auto: '25M1P detected automatically',
       m18Title: '18M: 18 metres indoor, ends of 3 arrows, X is not written', m5070Title: '50/70M: outdoor, ends of 3 or 6 arrows, X is written',
-      m5070Auto: 'Ianseo card detected: 50/70M', sum: 'Sum', tenX: '10+X', x: 'X', perN: 'ends of {n}', filledTen: 'Unreadable, but it comes before a ten, so it is {v}',
+      m5070Auto: 'Ianseo card detected: 50/70M', sum: 'Sum', tenX: '10+X', x: 'X', perN: 'ends of {n}', filledTen: 'Hard to read; arrows go from high to low, so this is {v}',
       torch: 'Torch', photo: 'Photo', training: 'Training data', freeze: 'Freeze', resume: 'Resume', camera: 'Camera',
       targetAria: 'Target face with three arrows in the 10, the 9 and the 8',
       intro: 'Point the camera at the score sheet. The app adds up the arrows and checks the ends and the total. Choose 18M (indoor, ends of 3), 50/70M (outdoor, ends of 3 or 6, also Ianseo cards) or 25M1P at the top. An Ianseo or 25M1P card is recognised automatically.',
       exampleAria: 'Example: row 3, arrows 10, 9 and 8, end total 27 is correct',
       loading: 'Loading recognition…', ready: 'Ready. Recognition runs on your phone itself; nothing is sent to the internet.',
-      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 21 · 3 November 2026',
+      loadFail: 'Recognition could not load: {e}', startCamera: 'Start camera', choosePhoto: 'Choose photo', version: 'Version 22 · 6 November 2026',
       needHttps: 'The camera only works when the app is opened over https.',
       noCamAccess: 'No access to the camera. Allow camera access for this site in your browser settings.',
       camFail: 'The camera could not start ({e}).',
@@ -171,7 +171,14 @@
   }
 
   /* ---------------------------------------------------------------- voting */
-  function resetAll() { S.hist.clear(); S.vals.clear(); S.over.clear(); S.conf.clear(); S.cands.clear(); S.geo = []; }
+  function resetAll() { S.hist.clear(); S.vals.clear(); S.over.clear(); S.conf.clear(); S.cands.clear(); S.dist.clear(); S.geo = []; }
+  // how likely each arrow value is for a mark, added up over the frames (index: 0 = M … 10, 11 = X)
+  function keepDist(key, dist, instant) {
+    if (!dist) return;
+    const m = !instant && S.dist.get(key) || new Float32Array(12);
+    for (let r = 0; r < 12; r++) m[r] += dist[r];
+    S.dist.set(key, m);
+  }
   // alternative readings of a number over the last frames: reading -> best relative confidence
   function keepCands(key, cands) {
     if (!cands) return;
@@ -223,7 +230,7 @@
       S.geo = res.sheets.map(sh => ({ quad: sh.quad, Tinv: sh.Tinv, W: sh.W, H: sh.H, nrows: sh.nrows, hasTotal: sh.hasTotal, layout: sh.layout, cols: sh.cols, spans: sh.spans, step: sh.step, pairs: !!sh.pairs }));
       res.sheets.forEach((sh, si) => {
         sh.rows.forEach((r, ri) => {
-          r.arrows.forEach((a, k) => vote(`${si}:${ri}:a${k}`, cellVal(a, 'arrow'), instant, a.conf));
+          r.arrows.forEach((a, k) => { vote(`${si}:${ri}:a${k}`, cellVal(a, 'arrow'), instant, a.conf); keepDist(`${si}:${ri}:a${k}`, a.dist, instant); });
           for (const [f] of numFields(S.geo[si], ri)) {
             const c = r[f]; if (!c) continue;
             vote(keyOf(si, ri, f), cellVal(c, 'num'), instant, c.conf); keepCands(keyOf(si, ri, f), c.cands);
@@ -254,8 +261,13 @@
       stable.push(keys.every(k => get(`${si}:${ri}:${k}`) !== undefined));
       const label = isIan ? (ri % 2 === 0 ? String(ri / 2 + 1) : '') : String((ri + 1) * g.step);
       const row = { label, arrows: g.spans.arrows.map((_, k) => val(`${si}:${ri}:a${k}`)), sub: val(`${si}:${ri}:sub`), cum: g.spans.cum ? val(`${si}:${ri}:cum`) : null, filled: [] };
-      // arrows go from high to low: an unreadable arrow in front of a ten is a ten (18M) or a 10/X (50/70M)
-      if (!is25) { const r = resolveTens(row.arrows, isIan || S.mode !== 18); row.arrows = r.arrows; row.filled = r.filled; }
+      // arrows go from high to low: an unreadable arrow lies between its neighbours (9 ? 9 is 9, 10 ? 9 is 10
+      // or 9, ? 10 is 10, or 10/X where X is written); a value typed in by hand is left alone
+      if (!is25) {
+        const dists = row.arrows.map((_, k) => S.over.has(`${si}:${ri}:a${k}`) ? null : S.dist.get(`${si}:${ri}:a${k}`));
+        const r = resolveArrows(row.arrows, isIan || S.mode !== 18, dists, row.sub);
+        row.arrows = r.arrows; row.filled = r.filled;
+      }
       if (isIan) { row.end = val(`${si}:${ri}:end`); row.tx = val(`${si}:${ri}:tx`); row.xx = val(`${si}:${ri}:xx`); }
       rows.push(row);
     }
